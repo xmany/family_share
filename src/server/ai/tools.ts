@@ -21,12 +21,19 @@ const date = (description: string): Schema => ({ type: 'string', format: 'date',
 const oneOf = (values: readonly string[], description: string): Schema => ({ type: 'string', enum: [...values], description })
 const bool = (description: string): Schema => ({ type: 'boolean', description })
 
+/**
+ * Required properties go first on the wire. With an optional property listed before a required one, strict
+ * mode never let Opus 5.5 emit the optionals that followed: every create_item came back without due_date /
+ * due_time, so reminders failed until the iteration cap. Declared order is kept within each group.
+ */
 function tool(name: string, description: string, properties: Record<string, Schema>, required: string[]): BetaTool {
+  const entries = Object.entries(properties)
+  const ordered = Object.fromEntries([...entries.filter(([k]) => required.includes(k)), ...entries.filter(([k]) => !required.includes(k))])
   return {
     name,
     description,
     strict: true,
-    input_schema: { type: 'object', properties, required, additionalProperties: false },
+    input_schema: { type: 'object', properties: ordered, required, additionalProperties: false },
   }
 }
 
