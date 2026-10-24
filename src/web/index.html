@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f1ea" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171513" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="说一句话，家里的事就安排好了" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="家庭同步" />
+    <meta name="application-name" content="家庭同步" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <title>家庭同步</title>
+    <style>
+      /* no white flash before the stylesheet loads */
+      html,
+      body {
+        background: #f5f1ea;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #171513;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>
