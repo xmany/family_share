@@ -18,6 +18,7 @@ import { sendTestNotification } from '../http/actions'
 import { createInvite, sessionCounts } from '../http/auth'
 import { revokeMemberAccess } from '../http/revoke'
 import { Outbox } from '../notify/outbox'
+import { pruneRecordings } from '../recordings'
 import { createStt, mimeForExt, SttError } from '../stt/index'
 import type { SttProvider } from '../stt/index'
 import type { Clock } from '../time'
@@ -40,6 +41,8 @@ export const USAGE = `family_share 管理命令 (npm run family -- <command>)
   stt-test [--file <录音>]                  check speech-to-text: transcribes the file, or (macOS) a Mandarin sentence
                                            spoken by the built-in Chinese voice; the first local-whisper run may download
                                            the model
+  prune-audio --days <天数> [--dry-run]     delete voice recordings older than that from DATA_DIR/audio (transcripts
+                                           stay); scripts/backup.sh runs it nightly when AUDIO_KEEP_DAYS is set
 
 Invite links look like \${PUBLIC_URL}/join#token=… — open them on the member's phone
 (Safari on iPhone, Chrome on Android; not inside WeChat). Each works up to 5 times within 7 days.`
@@ -301,6 +304,23 @@ async function cmdSttTest(args: ParsedArgs, deps: CliDeps) {
   }
 }
 
+function cmdPruneAudio(args: ParsedArgs, deps: CliDeps) {
+  const raw = requireFlag(args, 'days', '<天数>, e.g. --days 30')
+  const days = Number(raw)
+  if (!Number.isInteger(days) || days < 1) throw new CliError(`--days must be a whole number of days, 1 or more (got "${raw}")`)
+  const dryRun = !!args.flags['dry-run']
+  const db = deps.db ?? openDb(deps.config.dbPath)
+  try {
+    const now = (deps.clock ?? systemClock).now()
+    const r = pruneRecordings(db, deps.config.audioDir, { olderThanDays: days, now, dryRun })
+    const size = r.bytes < 1024 * 1024 ? `${Math.ceil(r.bytes / 1024)} KB` : `${(r.bytes / (1024 * 1024)).toFixed(1)} MB`
+    const what = `${r.files} recording(s), ${size}, older than ${days} days in ${deps.config.audioDir}`
+    deps.out(dryRun ? `dry run: would delete ${what}` : `deleted ${what} (transcripts kept)`)
+  } finally {
+    if (!deps.db) db.close()
+  }
+}
+
 /** Runs one CLI invocation. Returns the process exit code. */
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<number> {
   const args = parseArgs(argv)
@@ -333,6 +353,9 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         break
       case 'stt-test':
         await cmdSttTest(args, deps)
+        break
+      case 'prune-audio':
+        cmdPruneAudio(args, deps)
         break
       default:
         deps.err(`unknown command "${args.command}"\n`)

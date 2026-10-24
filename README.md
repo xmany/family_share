@@ -132,7 +132,47 @@ npm run dev        # API 在 8787，网页（Vite）在 http://localhost:5173
   - 笔记本合上盖子就会睡眠，这时不会发提醒。
   - 机器醒来后会补发错过的提醒：晚了 15 分钟以上的标题前加「（迟到）」，晚了 12 小时以上的到期提醒和摘要直接跳过。
 
-**备份**：要备份的是整个 `DATA_DIR`（默认 `./data`）。数据库使用 WAL 模式，所以运行中请用 `sqlite3 data/family.db ".backup backup.db"` 备份，或者先停掉服务器再复制。建议执行 `chmod 700 data（新版本会自动设置）`，不让这台电脑上的其他账号读取。
+**备份**：要备份的是 `DATA_DIR`（默认 `./data`）里的数据库 `family.db` 和录音 `audio/`。数据库使用 WAL 模式，服务器运行时直接复制文件可能得到坏的副本，所以请用脚本备份（Mac）：
+
+```bash
+bash scripts/install-backup.sh            # 先备份一次，再装成每天 03:30 自动运行的后台任务（launchd）
+bash scripts/install-backup.sh --print    # 只打印 launchd 配置，不安装
+bash scripts/install-backup.sh --remove   # 移除定时任务，已有的备份不会删除
+bash scripts/backup.sh                    # 随时手动备份一次，比如更新代码之前
+```
+
+- 每次备份是 `~/Backups/family_share/` 下一个以时间命名的文件夹，比如 `2026-10-25_033000/`。里面的 `family.db` 用 `sqlite3 .backup` 生成，并且通过了 `PRAGMA integrity_check`；`audio/` 是录音。录音不会改变，和上一份备份相同的录音用硬链接，不重复占空间。
+- 默认保留最近 14 天。在 `.env` 里可以改 `BACKUP_DIR`（备份放哪里）和 `BACKUP_KEEP_DAYS`（保留几天）。每次运行都会重新读 `.env`，改了不用重装。
+- 备份和数据在同一块硬盘上，只能防误删和软件出错，防不了硬盘坏掉。可以把 `BACKUP_DIR` 设到外接硬盘，或者用时间机器（Time Machine）备份 `~/Backups`。
+- 每次运行的结果记在 `data/logs/backup.log`：成功是「备份完成 / backup ok」，出错是「失败 / FAILED」，原因在它前一行。装好后想马上在 launchd 里试一次，运行 `launchctl kickstart gui/$(id -u)/com.familyshare.backup`，再看这个日志（备份放在外接硬盘上时尤其要试，macOS 可能不让后台任务访问外接硬盘）。
+- 这个任务（`com.familyshare.backup`）和服务器的 `com.familyshare.server` 是分开的，装或移除它都不影响服务器。
+- 备份文件只有这个账号能读。`data` 目录也建议 `chmod 700 data`（新版本会自动设置），不让这台电脑上的其他账号读取。
+
+检查某一份备份：`sqlite3 ~/Backups/family_share/2026-10-25_033000/family.db "PRAGMA integrity_check"`，输出 `ok` 就没问题。
+
+**恢复**：先停掉服务器，把现在的数据挪到一边（先不删），再把备份复制回来：
+
+```bash
+bash scripts/install-service.sh --remove                         # 停掉服务器
+mkdir -p data/before-restore
+mv data/family.db* data/audio data/before-restore/                # family.db-wal 和 family.db-shm 要一起挪走
+cp ~/Backups/family_share/2026-10-25_033000/family.db data/
+cp -Rp ~/Backups/family_share/2026-10-25_033000/audio data/
+bash scripts/install-service.sh                                  # 重新启动
+```
+
+旧的 `family.db-wal` 和 `family.db-shm` 留在恢复的数据库旁边会把它弄坏，所以要和旧数据库一起挪走。确认恢复正常后，再删掉 `data/before-restore`。
+
+**日志**：`data/logs/` 里的 `server.log` 和 `backup.log` 超过 10 MB 时，每晚的任务会把它压缩成 `server.log.1.gz` 这样的文件，最多保留 5 份旧日志。launchd 一直开着日志文件，所以是先复制再清空，不用重启服务器。
+
+**录音**：每条语音都存在 `data/audio/`。转成文字以后，App 不会再读这些录音。留着它们只是为了以后重新识别，或者拿真实录音比较不同的语音识别服务，所以默认一直保留。想自动删掉旧录音，就在 `.env` 里加 `AUDIO_KEEP_DAYS=30`（天数自己定）：
+
+- 每晚备份完以后，删除 30 天以前的录音。文字记录不受影响，数据库里对应的 `audio_path` 会清空。
+- 删掉的录音在之前的备份里还会保留 `BACKUP_KEEP_DAYS` 天。
+- 这一步用的是 `dist/` 里的程序，所以更新代码后要 `npm run build`。
+- 想先看看会删哪些：`npm run family -- prune-audio --days 30 --dry-run`。
+
+> English: `bash scripts/install-backup.sh` backs up `family.db` (`sqlite3 .backup`) and `audio/` to `~/Backups/family_share` every night at 03:30, keeps 14 days, rotates logs over 10 MB and, when `AUDIO_KEEP_DAYS` is set, deletes older recordings. To restore, stop the server, move `data/family.db*` and `data/audio` aside and copy a backup in; `--remove` uninstalls the job and keeps the backups.
 
 ---
 
@@ -258,7 +298,7 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 
 ## 隐私
 
-- **数据存放**：所有数据都在你自己的机器上的 `DATA_DIR` 里。`family.db` 里是事项、对话、成员和通知记录，`audio/` 里是录音（只有服务器账号能读）。App 本身没有任何统计或埋点，除了下面列出的服务，数据不会发到别处。
+- **数据存放**：所有数据都在你自己的机器上的 `DATA_DIR` 里。`family.db` 里是事项、对话、成员和通知记录，`audio/` 里是录音（只有服务器账号能读；默认一直保留，可以设 `AUDIO_KEEP_DAYS` 定期删除，见「运行 → 录音」）。App 本身没有任何统计或埋点，除了下面列出的服务，数据不会发到别处。
 - **Anthropic（Claude）**：会收到每句话的文字，以及当时的看板摘要（成员名字和别名、进行中的事项标题和备注、最近 8 句对话）。
 - **OpenAI 或阿里云（语音识别）**：会收到录音，以及用来提高识别率的关键词（成员名字、别名和事项标题）。用本机 Whisper 时录音不出这台电脑。
 - **腾讯（微信）**：会看到模板消息的内容（每个字段大约 20 个字）、你发给测试号的文字，以及你的 openid。
