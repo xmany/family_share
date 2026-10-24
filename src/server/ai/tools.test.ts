@@ -37,6 +37,16 @@ describe('tool schemas stay inside strict-mode limits', () => {
     expect(unions).toBeLessThanOrEqual(16)
   })
 
+  it('lists required properties before optional ones (strict mode drops optionals declared before a required one)', () => {
+    for (const t of TOOLS) {
+      const keys = Object.keys(t.input_schema.properties ?? {})
+      const req = new Set(t.input_schema.required ?? [])
+      const firstOptional = keys.findIndex(k => !req.has(k))
+      const lastRequired = keys.findLastIndex(k => req.has(k))
+      expect(firstOptional === -1 || lastRequired < firstOptional, `${t.name}: ${keys.join(', ')}`).toBe(true)
+    }
+  })
+
   it('has exactly the SPEC §4 tools, and a zod schema with the same fields for each', () => {
     expect(TOOLS.map(t => t.name)).toEqual([
       'search_items',
