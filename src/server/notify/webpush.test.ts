@@ -13,6 +13,7 @@ import {
   listPushSubscriptions,
   pushNavigateUrl,
   pushOptionsFor,
+  pushTopic,
   upsertPushSubscription,
 } from './webpush'
 
@@ -99,17 +100,26 @@ describe('push payload', () => {
 
 describe('push options', () => {
   it('sets TTL / urgency / topic per kind', () => {
-    expect(pushOptionsFor({ kind: 'request_new', itemId: 'i_abc123' })).toEqual({ TTL: 3600, urgency: 'high', topic: 'ii_abc123' })
+    expect(pushOptionsFor({ kind: 'request_new', itemId: 'i_abc123' })).toEqual({ TTL: 3600, urgency: 'high', topic: pushTopic('ii_abc123') })
     expect(pushOptionsFor({ kind: 'due', itemId: 'i_x' })).toMatchObject({ TTL: 3600, urgency: 'high' })
     expect(pushOptionsFor({ kind: 'explicit', itemId: null })).toEqual({ TTL: 3600, urgency: 'high' })
     expect(pushOptionsFor({ kind: 'assigned', itemId: 'i_x' })).toMatchObject({ TTL: 6 * 3600, urgency: 'high' })
     expect(pushOptionsFor({ kind: 'stale', itemId: 'i_x' })).toMatchObject({ TTL: 6 * 3600, urgency: 'normal' })
-    expect(pushOptionsFor({ kind: 'digest', itemId: null })).toEqual({ TTL: 12 * 3600, urgency: 'normal', topic: 'digest' })
+    expect(pushOptionsFor({ kind: 'digest', itemId: null })).toEqual({ TTL: 12 * 3600, urgency: 'normal', topic: pushTopic('digest') })
     expect(pushOptionsFor({ kind: 'weekly', itemId: null })).toMatchObject({ TTL: 12 * 3600, urgency: 'normal' })
     expect(pushOptionsFor({ kind: 'test', itemId: null })).toEqual({ TTL: 6 * 3600, urgency: 'normal' })
     // topic: URL-safe base64 alphabet only, <= 32 chars
     const long = pushOptionsFor({ kind: 'due', itemId: 'i_' + 'x.y/z'.repeat(20) })
     expect(long.topic).toMatch(/^[A-Za-z0-9_-]{1,32}$/)
+  })
+
+  it('makes every topic valid base64url (Apple rejects lengths of 4k+1 with BadWebPushTopic)', () => {
+    for (const key of ['ii_v731s9uce8', 'digest', 'weekly', 'i' + 'i_' + 'a'.repeat(40)]) {
+      const topic = pushTopic(key)
+      expect(topic).toMatch(/^[A-Za-z0-9_-]{32}$/)
+      expect(Buffer.from(topic, 'base64url').toString('base64url')).toBe(topic)
+    }
+    expect(pushTopic('ii_aaaaaaaaaa')).not.toBe(pushTopic('ii_aaaaaaaaab'))
   })
 })
 
@@ -142,7 +152,7 @@ describe('webpush channel', () => {
     expect(calls[0]!.options).toEqual({
       TTL: 3600,
       urgency: 'high',
-      topic: `i${item.id}`,
+      topic: pushTopic(`i${item.id}`),
       timeout: 10_000,
       vapidDetails: { subject: VAPID.subject, publicKey: VAPID.publicKey, privateKey: VAPID.privateKey },
     })
