@@ -9,6 +9,7 @@ import { ROLE_LABEL } from '../lib/labels'
 import { disablePush, isStandalone } from '../lib/push'
 import { navigate } from '../lib/router'
 import { now, refreshBoard, setSignedOut, updateMe, useApp } from '../lib/store'
+import { setThemePref, useThemePref, type ThemePref } from '../lib/theme'
 import { toast } from '../lib/toast'
 import { InstallGuide, PushControl } from '../components/setup'
 import { InvitePanel } from '../components/InvitePanel'
@@ -82,6 +83,7 @@ export function SettingsPage() {
         <NotificationsCard vapidKey={app.me?.vapidPublicKey ?? null} settings={settings} onChanged={() => void load()} />
         <WechatCard settings={settings} tz={tz} onSave={save} onReload={load} />
         <FamilyCard me={me} members={app.board?.members ?? []} tz={tz} />
+        <AppearanceCard />
         <InstallCard />
         <LogoutCard />
         <p className="hint mt-8 text-center">
@@ -471,6 +473,31 @@ function FamilyCard({ me, members, tz }: { me: Member; members: Member[]; tz: st
         </form>
       )}
     </section>
+  )
+}
+
+const THEMES: Array<{ value: ThemePref; label: string }> = [
+  { value: 'system', label: '跟随系统' },
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
+]
+
+/** Light / dark / follow the phone: this device only, saved the moment it is tapped (no 保存 button). */
+function AppearanceCard() {
+  const pref = useThemePref()
+  return (
+    <Card title="外观">
+      <div className="seg seg-fill" role="group" aria-label="外观">
+        {THEMES.map(t => (
+          <button key={t.value} type="button" className="seg-btn" aria-pressed={pref === t.value} onClick={() => setThemePref(t.value)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <p className="hint -mt-1.5">
+        {pref === 'system' ? '手机切换浅色、深色时，这里跟着变。' : '只改这台手机，家人的不受影响。'}
+      </p>
+    </Card>
   )
 }
 

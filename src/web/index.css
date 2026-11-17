@@ -2,7 +2,8 @@
 
 /* Design system: hulicalendar's "Night navy" language (hulicalendar/frontend/src/styles/system.css), adapted to a
    phone-first Chinese app.
-   - Grounds: warm paper (light) and deep navy (dark), following the phone's setting.
+   - Grounds: warm paper (light) and deep navy (dark). <html data-theme> picks one: the reader's choice in 设置 → 外观,
+     else the phone's setting (index.html sets it before first paint, lib/theme.ts keeps it current).
    - One cobalt accent: primary buttons, links, the active tab, "today". The fox orange (now) marks only what is live or
      waiting on you: recording, the unread dot, the 等我回复 badge.
    - Hairlines (line) decorate; edges (edge, >= 3:1) outline controls and icons. Cards are 20 px, controls 12 px.
@@ -61,46 +62,49 @@
   --dawn-line: rgb(200 90 20 / 0.22);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #0d1321;
-    --color-surface: #141b2b;
-    --color-surface-2: #1b2335;
-    --color-surface-3: #242d42;
-    --color-line: #232b3e;
-    --color-edge: #7a86a0;
-    --color-ink: #e7ecf5;
-    --color-ink-2: #b3bccd;
-    --color-muted: #9ca7bc;
-    --color-faint: #7a86a0;
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
 
-    --color-accent: #88a3f6;
-    --color-accent-fill: #3a5bd0;
-    --color-accent-ink: #ffffff;
-    --color-accent-soft: #1c2a57;
-    --color-accent-strong: #bccbfb;
+  --color-bg: #0d1321;
+  --color-surface: #141b2b;
+  --color-surface-2: #1b2335;
+  --color-surface-3: #242d42;
+  --color-line: #232b3e;
+  --color-edge: #7a86a0;
+  --color-ink: #e7ecf5;
+  --color-ink-2: #b3bccd;
+  --color-muted: #9ca7bc;
+  --color-faint: #7a86a0;
 
-    --color-now: #fb6309;
-    --color-now-ink: #040b1f;
+  --color-accent: #88a3f6;
+  --color-accent-fill: #3a5bd0;
+  --color-accent-ink: #ffffff;
+  --color-accent-soft: #1c2a57;
+  --color-accent-strong: #bccbfb;
 
-    --color-danger: #f5a9a6;
-    --color-danger-soft: #4a1d1d;
-    --color-ok: #86dcbc;
-    --color-ok-soft: #133a2f;
-    --color-warn: #f0c274;
-    --color-warn-soft: #412f10;
+  --color-now: #fb6309;
+  --color-now-ink: #040b1f;
 
-    --sh-1: 0 1px 2px rgb(0 0 0 / 0.35);
-    --sh-2: 0 16px 40px -16px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.25);
-    --sh-3: 0 28px 72px -16px rgb(0 0 0 / 0.66), 0 4px 12px rgb(0 0 0 / 0.3);
-    --focus: #bccbfb;
-    --sky-dusk: radial-gradient(120% 90% at 88% -10%, rgb(136 163 246 / 0.08), transparent 58%),
-      linear-gradient(168deg, #1f3356, #1d3052 46%, #182845);
-    --sky-dawn: radial-gradient(110% 80% at 8% -10%, rgb(252 147 14 / 0.12), transparent 55%),
-      linear-gradient(168deg, #1b2233, #161d2d 55%, #141b2a);
-    --dusk-line: rgb(136 163 246 / 0.3);
-    --dawn-line: rgb(251 120 40 / 0.2);
-  }
+  --color-danger: #f5a9a6;
+  --color-danger-soft: #4a1d1d;
+  --color-ok: #86dcbc;
+  --color-ok-soft: #133a2f;
+  --color-warn: #f0c274;
+  --color-warn-soft: #412f10;
+
+  --sh-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --sh-2: 0 16px 40px -16px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.25);
+  --sh-3: 0 28px 72px -16px rgb(0 0 0 / 0.66), 0 4px 12px rgb(0 0 0 / 0.3);
+  --focus: #bccbfb;
+  --sky-dusk: radial-gradient(120% 90% at 88% -10%, rgb(136 163 246 / 0.08), transparent 58%),
+    linear-gradient(168deg, #1f3356, #1d3052 46%, #182845);
+  --sky-dawn: radial-gradient(110% 80% at 8% -10%, rgb(252 147 14 / 0.12), transparent 55%),
+    linear-gradient(168deg, #1b2233, #161d2d 55%, #141b2a);
+  --dusk-line: rgb(136 163 246 / 0.3);
+  --dawn-line: rgb(251 120 40 / 0.2);
 }
 
 @layer base {
@@ -719,39 +723,37 @@
     --av-bg: #e6efd2;
     --av-ink: #4a6a0f;
   }
-  @media (prefers-color-scheme: dark) {
-    .av-blue {
-      --av-bg: #22305e;
-      --av-ink: #bccbfb;
-    }
-    .av-pink {
-      --av-bg: #4b1f36;
-      --av-ink: #f4b6d1;
-    }
-    .av-green {
-      --av-bg: #133a2f;
-      --av-ink: #86dcbc;
-    }
-    .av-amber {
-      --av-bg: #43310f;
-      --av-ink: #f0c274;
-    }
-    .av-violet {
-      --av-bg: #2e2556;
-      --av-ink: #cfc0f8;
-    }
-    .av-teal {
-      --av-bg: #10363f;
-      --av-ink: #8fd5e0;
-    }
-    .av-red {
-      --av-bg: #4a1d1d;
-      --av-ink: #f5a9a6;
-    }
-    .av-lime {
-      --av-bg: #28350f;
-      --av-ink: #c0dc86;
-    }
+  [data-theme="dark"] .av-blue {
+    --av-bg: #22305e;
+    --av-ink: #bccbfb;
+  }
+  [data-theme="dark"] .av-pink {
+    --av-bg: #4b1f36;
+    --av-ink: #f4b6d1;
+  }
+  [data-theme="dark"] .av-green {
+    --av-bg: #133a2f;
+    --av-ink: #86dcbc;
+  }
+  [data-theme="dark"] .av-amber {
+    --av-bg: #43310f;
+    --av-ink: #f0c274;
+  }
+  [data-theme="dark"] .av-violet {
+    --av-bg: #2e2556;
+    --av-ink: #cfc0f8;
+  }
+  [data-theme="dark"] .av-teal {
+    --av-bg: #10363f;
+    --av-ink: #8fd5e0;
+  }
+  [data-theme="dark"] .av-red {
+    --av-bg: #4a1d1d;
+    --av-ink: #f5a9a6;
+  }
+  [data-theme="dark"] .av-lime {
+    --av-bg: #28350f;
+    --av-ink: #c0dc86;
   }
 
   /* ---------- section heads */
@@ -885,14 +887,12 @@
 
   /* light evening sky: navy-tinted hairlines, fills and meta text, so the warm-neutral chrome does not sit on the
      periwinkle (as hulicalendar's Tonight card) */
-  @media (prefers-color-scheme: light) {
-    .sky-dusk {
-      --color-line: rgb(29 48 82 / 0.13);
-      --color-edge: #6a748b;
-      --color-surface-2: #e4e9f4;
-      --color-surface-3: #dbe2f1;
-      --color-muted: #4f596d;
-    }
+  :root:not([data-theme="dark"]) .sky-dusk {
+    --color-line: rgb(29 48 82 / 0.13);
+    --color-edge: #6a748b;
+    --color-surface-2: #e4e9f4;
+    --color-surface-3: #dbe2f1;
+    --color-muted: #4f596d;
   }
 
   /* ---------- chat */

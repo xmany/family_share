@@ -9,6 +9,10 @@ import { App } from './App'
 import { initServiceWorker } from './lib/push'
 import { navigate } from './lib/router'
 import { scheduleBoardRefresh } from './lib/store'
+import { initTheme } from './lib/theme'
+
+// Light / dark: index.html already applied the choice before the first paint; from here on, follow changes to it.
+initTheme()
 
 // Service worker first, so its registration is ready before anyone taps 开启通知.
 initServiceWorker({
