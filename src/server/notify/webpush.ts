@@ -2,6 +2,7 @@
 // iOS 18.4+ renders it without the service worker; Chrome/Android hand it to sw.ts, which adds data.actions buttons.
 // docs/research/pwa.md §1 and §6, SPEC §7.
 
+import { createHash } from 'node:crypto'
 import webpush from 'web-push'
 import type { Config } from '../config'
 import type { Db } from '../db/db'
@@ -52,12 +53,17 @@ export function pushOptionsFor(n: Pick<ScheduledNotification, 'kind' | 'itemId'>
   const TTL = isRequest || n.kind === 'due' || n.kind === 'explicit' ? 3600 : n.kind === 'digest' || n.kind === 'weekly' ? 12 * 3600 : 6 * 3600
   const urgency = HIGH_URGENCY.includes(n.kind) ? 'high' : 'normal'
   const out: Omit<PushSendOptions, 'timeout' | 'vapidDetails'> = { TTL, urgency }
-  const topic = n.itemId ? `i${n.itemId}` : n.kind === 'digest' || n.kind === 'weekly' ? n.kind : null
-  if (topic) {
-    const clean = topic.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32)
-    if (clean) out.topic = clean
-  }
+  const key = n.itemId ? `i${n.itemId}` : n.kind === 'digest' || n.kind === 'weekly' ? n.kind : null
+  if (key) out.topic = pushTopic(key)
   return out
+}
+
+/**
+ * Topic header for a coalescing key: 32 base64url characters of its SHA-256. web.push.apple.com answers 400
+ * BadWebPushTopic unless the topic is valid base64url, which no string of length 4k+1 is ("ii_v731s9uce8").
+ */
+export function pushTopic(key: string): string {
+  return createHash('sha256').update(key).digest('base64url').slice(0, 32)
 }
 
 /** `${publicUrl}${path}${?|&}src=push` (absolute URLs are kept as they are). */
