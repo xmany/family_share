@@ -126,22 +126,28 @@ export function ItemPage({ id }: { id: string }) {
       />
       <div className="page-pad flex flex-col gap-4">
         {/* summary */}
-        <div className="card p-4">
-          <div className="flex items-center gap-2 text-[13.5px] text-muted">
-            <KindIcon kind={item.kind} size={17} />
-            <span>{KIND_LABEL[item.kind]}</span>
+        <div className="card p-5">
+          <div className="flex flex-wrap items-center gap-2 text-[14px] text-muted">
+            <span className="kind-tile h-7 w-7 rounded-lg">
+              <KindIcon kind={item.kind} size={16} />
+            </span>
+            <span className="font-medium">{KIND_LABEL[item.kind]}</span>
             <StatusPill item={item} overdue={overdue} />
             {item.priority !== 'normal' && <Pill tone={item.priority === 'high' ? 'danger' : 'neutral'}>{PRIORITY_LABEL[item.priority]}</Pill>}
           </div>
-          <h2 className={`mt-2 text-[22px] leading-snug font-bold ${closed ? 'text-muted line-through decoration-faint' : ''}`}>
+          <h2
+            className={`mt-3 text-[24px] leading-[1.33] font-[620] ${closed ? 'font-normal text-muted line-through decoration-faint' : ''}`}
+          >
             {item.title}
           </h2>
 
-          <dl className="mt-3 flex flex-col gap-2 text-[15px]">
+          {item.details && <p className="well mt-3 px-3.5 py-3 text-[15px] whitespace-pre-wrap text-ink-2">{item.details}</p>}
+
+          <dl className="fields mt-4">
             <Field label="负责">
               {owner ? (
                 <span className="inline-flex items-center gap-2">
-                  <Avatar member={owner} size={24} />
+                  <Avatar member={owner} size={26} />
                   {nameFor(item.ownerId, members, meId)}
                 </span>
               ) : (
@@ -151,45 +157,53 @@ export function ItemPage({ id }: { id: string }) {
             {isRequest && item.requestedBy && (
               <Field label="谁请的">
                 <span className="inline-flex items-center gap-2">
-                  <Avatar member={members.get(item.requestedBy)} size={24} />
+                  <Avatar member={members.get(item.requestedBy)} size={26} />
                   {nameFor(item.requestedBy, members, meId)}
                 </span>
               </Field>
             )}
             {due && (
               <Field label="时间">
-                <span className={overdue ? 'font-semibold text-danger' : due.today ? 'font-semibold text-accent' : ''}>
-                  {due.label}
+                <span className={overdue ? 'font-semibold text-danger' : due.today ? 'font-semibold text-accent-strong' : ''}>
+                  <span className="when">{due.label}</span>
                   {overdue && '（已过期）'}
                 </span>
               </Field>
             )}
             {active && isSnoozed(item, nowD) && item.snoozedUntil && (
-              <Field label="推迟到">{formatInstantZh(item.snoozedUntil, nowD, tz)}</Field>
+              <Field label="推迟到">
+                <span className="when">{formatInstantZh(item.snoozedUntil, nowD, tz)}</span>
+              </Field>
             )}
-            {active && item.remindAt && <Field label="下次提醒">{formatInstantZh(item.remindAt, nowD, tz)}</Field>}
-            {item.completedAt && <Field label="完成于">{formatInstantZh(item.completedAt, nowD, tz)}</Field>}
+            {active && item.remindAt && (
+              <Field label="下次提醒">
+                <span className="when">{formatInstantZh(item.remindAt, nowD, tz)}</span>
+              </Field>
+            )}
+            {item.completedAt && (
+              <Field label="完成于">
+                <span className="when">{formatInstantZh(item.completedAt, nowD, tz)}</span>
+              </Field>
+            )}
             <Field label="创建">
               <span className="text-muted">
-                {nameFor(item.createdBy, members, meId)} · {formatInstantZh(item.createdAt, nowD, tz)}
+                {nameFor(item.createdBy, members, meId)} · <span className="when">{formatInstantZh(item.createdAt, nowD, tz)}</span>
               </span>
             </Field>
           </dl>
-
-          {item.details && <p className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5 text-[15px] whitespace-pre-wrap">{item.details}</p>}
         </div>
 
         {/* primary actions */}
         {pendingForMe && (
-          <div className="card flex flex-col gap-3 p-4">
-            <p className="text-[15px]">{nameFor(item.requestedBy, members, meId)}在等你的回复</p>
+          <div className="sky sky-dusk flex flex-col gap-3 p-5">
+            <p className="text-[16px] font-semibold">{nameFor(item.requestedBy, members, meId)}在等你的回复</p>
             <RespondButtons item={item} large onChanged={() => void load()} />
           </div>
         )}
 
         {declinedMine && (
-          <div className="card flex flex-col gap-3 p-4">
-            <p className="text-[15px]">{nameFor(item.ownerId, members, meId)}说做不了。要怎么办？</p>
+          <div className="card flex flex-col gap-3 p-5">
+            <p className="text-[16px] font-semibold">{nameFor(item.ownerId, members, meId)}说做不了。要怎么办？</p>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -201,7 +215,7 @@ export function ItemPage({ id }: { id: string }) {
               </button>
               <button
                 type="button"
-                className="btn btn-outline flex-1"
+                className="btn flex-1"
                 disabled={!!busy}
                 onClick={() => void act('drop', () => api.updateItem(item.id, { status: 'dropped' }), '好的，不做了')}
               >
@@ -212,7 +226,7 @@ export function ItemPage({ id }: { id: string }) {
         )}
 
         {waitingOnThem && (
-          <div className="card flex items-center justify-between gap-3 p-4">
+          <div className="card flex items-center justify-between gap-3 py-3 pr-3 pl-5">
             <p className="min-w-0 text-[15px]">在等{nameFor(item.ownerId, members, meId)}回复</p>
             <DropButton
               label="不需要了"
@@ -237,7 +251,8 @@ export function ItemPage({ id }: { id: string }) {
               {item.kind !== 'idea' && (
                 <button
                   type="button"
-                  className={`btn btn-lg flex-1 ${panel === 'snooze' ? 'btn-outline' : ''}`}
+                  className={`btn btn-lg flex-1 ${panel === 'snooze' ? 'bg-surface-2' : ''}`}
+                  aria-expanded={panel === 'snooze'}
                   disabled={!!busy}
                   onClick={() => setPanel(p => (p === 'snooze' ? null : 'snooze'))}
                 >
@@ -252,16 +267,14 @@ export function ItemPage({ id }: { id: string }) {
                   <button
                     key={preset}
                     type="button"
-                    className="btn flex-col gap-0 py-2"
+                    className="choice"
                     disabled={!!busy}
                     onClick={() =>
                       void act(`snooze_${preset}`, () => api.snooze(item.id, { preset }), `已推迟到${label}`)
                     }
                   >
-                    <span>{label}</span>
-                    <span className="text-[12.5px] font-normal text-muted">
-                      {formatInstantZh(resolveSnoozePreset(preset, nowD, tz), nowD, tz)}
-                    </span>
+                    <span className="choice-t">{label}</span>
+                    <span className="choice-d when">{formatInstantZh(resolveSnoozePreset(preset, nowD, tz), nowD, tz)}</span>
                   </button>
                 ))}
               </div>
@@ -272,7 +285,7 @@ export function ItemPage({ id }: { id: string }) {
         {closed && !isRequest && (
           <button
             type="button"
-            className="btn btn-outline"
+            className="btn"
             disabled={!!busy}
             onClick={() => void act('reopen', () => api.updateItem(item.id, { status: 'open' }), '已重新打开')}
           >
@@ -282,11 +295,21 @@ export function ItemPage({ id }: { id: string }) {
 
         {/* secondary actions */}
         <div className="flex gap-2">
-          <button type="button" className="btn btn-sm flex-1" onClick={() => setPanel(p => (p === 'edit' ? null : 'edit'))}>
+          <button
+            type="button"
+            className={`btn btn-sm flex-1 ${panel === 'edit' ? 'bg-surface-2' : ''}`}
+            aria-expanded={panel === 'edit'}
+            onClick={() => setPanel(p => (p === 'edit' ? null : 'edit'))}
+          >
             <IconEdit size={16} />
             编辑
           </button>
-          <button type="button" className="btn btn-sm flex-1" onClick={() => setPanel(p => (p === 'note' ? null : 'note'))}>
+          <button
+            type="button"
+            className={`btn btn-sm flex-1 ${panel === 'note' ? 'bg-surface-2' : ''}`}
+            aria-expanded={panel === 'note'}
+            onClick={() => setPanel(p => (p === 'note' ? null : 'note'))}
+          >
             <IconNote size={16} />
             加备注
           </button>
@@ -346,18 +369,18 @@ export function ItemPage({ id }: { id: string }) {
         {/* notes */}
         {detail && detail.notes.length > 0 && (
           <section>
-            <h3 className="section-title mt-2">备注</h3>
+            <h3 className="section-title mt-3">备注</h3>
             <div className="card">
               {[...detail.notes]
                 .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
                 .map(n => (
                   <div key={n.id} className="list-row items-start">
-                    <Avatar member={n.memberId ? members.get(n.memberId) : undefined} size={26} />
+                    <Avatar member={n.memberId ? members.get(n.memberId) : undefined} size={28} />
                     <div className="min-w-0 flex-1">
                       <p className="text-[15px] whitespace-pre-wrap">{n.text}</p>
-                      <p className="mt-0.5 text-[12.5px] text-faint">
+                      <p className="hint mt-0.5">
                         {nameFor(n.memberId, members, meId)}
-                        {n.authorType === 'ai' ? '（通过对话）' : ''} · {formatInstantZh(n.createdAt, nowD, tz)}
+                        {n.authorType === 'ai' ? '（通过对话）' : ''} · <span className="when">{formatInstantZh(n.createdAt, nowD, tz)}</span>
                       </p>
                     </div>
                   </div>
@@ -369,18 +392,18 @@ export function ItemPage({ id }: { id: string }) {
         {/* upcoming notifications */}
         {detail && detail.notifications.some(n => n.status === 'scheduled') && (
           <section>
-            <h3 className="section-title mt-2">接下来的提醒</h3>
+            <h3 className="section-title mt-3">接下来的提醒</h3>
             <div className="card">
               {detail.notifications
                 .filter(n => n.status === 'scheduled')
                 .sort((a, b) => a.fireAt.localeCompare(b.fireAt))
                 .map(n => (
                   <div key={n.id} className="list-row">
-                    <Avatar member={members.get(n.memberId)} size={26} />
+                    <Avatar member={members.get(n.memberId)} size={28} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[15px]">{n.title}</p>
-                      <p className="text-[12.5px] text-faint">
-                        {formatInstantZh(n.fireAt, nowD, tz)} 提醒{nameFor(n.memberId, members, meId)}
+                      <p className="hint">
+                        <span className="when">{formatInstantZh(n.fireAt, nowD, tz)}</span> 提醒{nameFor(n.memberId, members, meId)}
                       </p>
                     </div>
                   </div>
@@ -392,24 +415,24 @@ export function ItemPage({ id }: { id: string }) {
         {/* history */}
         {detail && detail.events.length > 0 && (
           <section>
-            <h3 className="section-title mt-2">记录</h3>
+            <h3 className="section-title mt-3">记录</h3>
             <div className="card">
               {[...detail.events]
                 .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)
                 .map(ev => (
                   <div key={ev.id} className="list-row items-start">
                     {ev.memberId ? (
-                      <Avatar member={members.get(ev.memberId)} size={26} />
+                      <Avatar member={members.get(ev.memberId)} size={28} />
                     ) : (
-                      <span className="avatar bg-surface-2 text-[12px] text-muted" style={{ width: 26, height: 26 }}>
+                      <span className="avatar text-[13px]" style={{ width: 28, height: 28 }}>
                         系
                       </span>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className={`text-[15px] ${ev.undone ? 'text-muted line-through' : ''}`}>{ev.summary}</p>
-                      <p className="mt-0.5 text-[12.5px] text-faint">
+                      <p className={`text-[15px] ${ev.undone ? 'text-muted line-through decoration-faint' : ''}`}>{ev.summary}</p>
+                      <p className="hint mt-0.5">
                         {ev.memberId ? nameFor(ev.memberId, members, meId) : '系统'}
-                        {ev.actorType === 'ai' ? '（通过对话）' : ''} · {formatInstantZh(ev.createdAt, nowD, tz)}
+                        {ev.actorType === 'ai' ? '（通过对话）' : ''} · <span className="when">{formatInstantZh(ev.createdAt, nowD, tz)}</span>
                         {ev.undone && ' · 已撤销'}
                       </p>
                     </div>
@@ -425,11 +448,12 @@ export function ItemPage({ id }: { id: string }) {
   )
 }
 
+/** One line of the summary's field list (index.css .fields: label column, value, hairline between). */
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-center gap-3">
-      <dt className="w-16 flex-none text-[14px] text-muted">{label}</dt>
-      <dd className="min-w-0 flex-1">{children}</dd>
+    <div>
+      <dt>{label}</dt>
+      <dd className="min-w-0">{children}</dd>
     </div>
   )
 }
@@ -524,7 +548,7 @@ function EditForm({
 
   return (
     <form
-      className="card flex flex-col gap-3.5 p-4"
+      className="card flex flex-col gap-4 p-5"
       onSubmit={e => {
         e.preventDefault()
         save()
@@ -554,10 +578,8 @@ function EditForm({
             </option>
           ))}
         </select>
-        {isRequest && <p className="mt-1 text-[13px] text-muted">请求的负责人不能直接改；可以在对话里说「这个交给…」。</p>}
-        {!isRequest && ownerId && ownerId !== (item.ownerId ?? '') && (
-          <p className="mt-1 text-[13px] text-muted">保存后会通知对方。</p>
-        )}
+        {isRequest && <p className="hint mt-1.5">请求的负责人不能直接改；可以在对话里说「这个交给…」。</p>}
+        {!isRequest && ownerId && ownerId !== (item.ownerId ?? '') && <p className="hint mt-1.5">保存后会通知对方。</p>}
       </div>
       {!isIdea && (
         <div>
@@ -578,12 +600,12 @@ function EditForm({
               onChange={e => setTime(e.target.value)}
             />
           </div>
-          <div className="mt-1 flex items-center justify-between">
-            <p className="text-[13px] text-muted">只填日期 = 那天之内</p>
+          <div className="mt-1 flex min-h-[40px] items-center justify-between">
+            <p className="hint">只填日期 = 那天之内</p>
             {(date || time) && (
               <button
                 type="button"
-                className="btn btn-sm btn-ghost -mr-2"
+                className="btn btn-sm btn-link -mr-3"
                 onClick={() => {
                   setDate('')
                   setTime('')
@@ -608,7 +630,7 @@ function EditForm({
         />
       </div>
       <div className="flex gap-2">
-        <button type="button" className="btn btn-outline flex-1" onClick={onCancel} disabled={busy}>
+        <button type="button" className="btn flex-1" onClick={onCancel} disabled={busy}>
           取消
         </button>
         <button type="submit" className="btn btn-primary flex-1" disabled={busy}>
@@ -623,7 +645,7 @@ function NoteForm({ busy, onCancel, onSave }: { busy: boolean; onCancel: () => v
   const [text, setText] = useState('')
   return (
     <form
-      className="card flex flex-col gap-3 p-4"
+      className="card flex flex-col gap-3 p-5"
       onSubmit={e => {
         e.preventDefault()
         const t = text.trim()
@@ -640,7 +662,7 @@ function NoteForm({ busy, onCancel, onSave }: { busy: boolean; onCancel: () => v
         onChange={e => setText(e.target.value)}
       />
       <div className="flex gap-2">
-        <button type="button" className="btn btn-outline flex-1" onClick={onCancel} disabled={busy}>
+        <button type="button" className="btn flex-1" onClick={onCancel} disabled={busy}>
           取消
         </button>
         <button type="submit" className="btn btn-primary flex-1" disabled={busy || !text.trim()}>

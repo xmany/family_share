@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Generates the PWA icons in src/web/public/icons/ with no dependencies (PNG encoded with node:zlib).
-// The mark is a soft rounded house with a heart cut out of it, on the app's accent color.
+// The mark is a soft rounded house with a fox-orange heart in it, on hulicalendar's icon navy.
 //
 //   node scripts/make-icons.mjs
 //
@@ -17,9 +17,10 @@ import { fileURLToPath } from 'node:url'
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'web', 'public', 'icons')
 
-// Accent (matches --color-accent in src/web/index.css), with a slightly lighter top for depth.
-const ACCENT_TOP = [0xd8, 0x79, 0x4d]
-const ACCENT_BOTTOM = [0xbd, 0x5b, 0x33]
+// Icon navy with a slightly lighter top for depth, and the fox-orange heart (match MARK_* in src/web/components/Logo.tsx).
+const TILE_TOP = [0x22, 0x38, 0x5f]
+const TILE_BOTTOM = [0x18, 0x28, 0x45]
+const HEART = [0xfb, 0x63, 0x09]
 const WHITE = [0xff, 0xff, 0xff]
 
 // ---------- PNG encoding
@@ -145,7 +146,7 @@ function inHeart(mx, my) {
 /**
  * bg: 'rounded' | 'full' | 'none'
  * markScale: size of the mark box relative to the icon
- * heart: 'bg' (heart shows the background) | 'clear' (heart is transparent)
+ * heart: 'color' (the fox-orange heart) | 'clear' (heart is transparent)
  */
 function render(size, { bg, markScale, heart }) {
   const SS = 5 // supersampling per axis
@@ -162,9 +163,9 @@ function render(size, { bg, markScale, heart }) {
           const v = (py + (sy + 0.5) / SS) / size
           let color = null
           const bgColor = [
-            ACCENT_TOP[0] + (ACCENT_BOTTOM[0] - ACCENT_TOP[0]) * v,
-            ACCENT_TOP[1] + (ACCENT_BOTTOM[1] - ACCENT_TOP[1]) * v,
-            ACCENT_TOP[2] + (ACCENT_BOTTOM[2] - ACCENT_TOP[2]) * v,
+            TILE_TOP[0] + (TILE_BOTTOM[0] - TILE_TOP[0]) * v,
+            TILE_TOP[1] + (TILE_BOTTOM[1] - TILE_TOP[1]) * v,
+            TILE_TOP[2] + (TILE_BOTTOM[2] - TILE_TOP[2]) * v,
           ]
           if (bg === 'full') color = bgColor
           else if (bg === 'rounded' && sdRoundedRect(u, v, 0.5, 0.225) <= 0) color = bgColor
@@ -172,7 +173,7 @@ function render(size, { bg, markScale, heart }) {
           const my = (v - 0.5) / markScale + 0.5
           if (inHouse(mx, my)) {
             if (!inHeart(mx, my)) color = WHITE
-            else if (heart === 'clear') color = null
+            else color = heart === 'clear' ? null : HEART
           }
           if (color) {
             r += color[0]
@@ -202,8 +203,8 @@ function write(name, size, opts, pngOpts) {
 }
 
 mkdirSync(OUT_DIR, { recursive: true })
-write('icon-192.png', 192, { bg: 'rounded', markScale: 0.74, heart: 'bg' })
-write('icon-512.png', 512, { bg: 'rounded', markScale: 0.74, heart: 'bg' })
-write('icon-maskable-512.png', 512, { bg: 'full', markScale: 0.6, heart: 'bg' })
-write('apple-touch-icon.png', 180, { bg: 'full', markScale: 0.7, heart: 'bg' }, { alpha: false })
+write('icon-192.png', 192, { bg: 'rounded', markScale: 0.74, heart: 'color' })
+write('icon-512.png', 512, { bg: 'rounded', markScale: 0.74, heart: 'color' })
+write('icon-maskable-512.png', 512, { bg: 'full', markScale: 0.6, heart: 'color' })
+write('apple-touch-icon.png', 180, { bg: 'full', markScale: 0.7, heart: 'color' }, { alpha: false })
 write('badge-96.png', 96, { bg: 'none', markScale: 0.96, heart: 'clear' })

@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 import type { Item } from '../../shared/types'
 import { buildWeekly, daysSince } from '../lib/board'
 import { useApp, useNow } from '../lib/store'
-import { ItemCard } from '../components/items'
+import { ItemList, ItemRow } from '../components/items'
 import { Empty, PageHeader, Section } from '../components/ui'
 
 export function WeeklyPage() {
@@ -17,38 +17,32 @@ export function WeeklyPage() {
   if (!board) return null
 
   const list = (items: Item[], note?: (it: Item) => string) => (
-    <div className="flex flex-col gap-2.5">
+    <ItemList>
       {items.map(it => (
-        <div key={it.id}>
-          <ItemCard item={it} members={members} meId={meId} now={nowD} tz={tz} />
-          {note && <p className="mt-1 px-2 text-[12.5px] text-muted">{note(it)}</p>}
-        </div>
+        <ItemRow key={it.id} item={it} members={members} meId={meId} now={nowD} tz={tz} note={note?.(it)} />
       ))}
-    </div>
+    </ItemList>
   )
+  const upcomingCount = w.upcoming.reduce((n, d) => n + d.items.length, 0)
 
   return (
     <div className="page">
       <PageHeader title="本周" back="/board" />
-      <div className="page-pad -mt-2">
-        <p className="px-1 pt-1 text-[15px] text-muted">
-          这一周完成了 <b className="text-ink">{w.done.length}</b> 件事
-          {w.stuck.length > 0 && (
-            <>
-              ，有 <b className="text-ink">{w.stuck.length}</b> 件放了一周以上
-            </>
-          )}
-          。
-        </p>
+      <div className="page-pad">
+        <div className="mt-1 grid grid-cols-3 gap-2.5" role="list" aria-label="这一周">
+          <Tile figure={w.done.length} label="件完成了" />
+          <Tile figure={upcomingCount} label="件在 7 天内" />
+          <Tile figure={w.stuck.length} label="件卡住了" alert={w.stuck.length > 0} />
+        </div>
 
-        <Section title="接下来 7 天" count={w.upcoming.reduce((n, d) => n + d.items.length, 0)}>
+        <Section title="接下来 7 天" count={upcomingCount}>
           {w.upcoming.length === 0 ? (
             <Empty>接下来 7 天没有定了时间的事</Empty>
           ) : (
             <div className="flex flex-col gap-4">
               {w.upcoming.map(day => (
                 <div key={day.date}>
-                  <div className="mb-1.5 px-1 text-[14px] font-semibold text-muted">{day.label}</div>
+                  <div className="caps mb-2 px-1">{day.label}</div>
                   {list(day.items)}
                 </div>
               ))}
@@ -72,6 +66,15 @@ export function WeeklyPage() {
           {w.done.length ? list(w.done) : <Empty>这周还没有完成的事</Empty>}
         </Section>
       </div>
+    </div>
+  )
+}
+
+function Tile({ figure, label, alert = false }: { figure: number; label: string; alert?: boolean }) {
+  return (
+    <div className="tile" role="listitem">
+      <b className={alert ? 'text-warn' : undefined}>{figure}</b>
+      <span className="mt-1 block text-[14px] leading-snug text-muted">{label}</span>
     </div>
   )
 }

@@ -230,18 +230,14 @@ export function Composer({
   return (
     <div className="composer">
       {phase !== 'idle' && (
-        <div
-          className="pointer-events-none absolute inset-x-3 bottom-full mb-2 flex flex-col items-center gap-1.5 rounded-3xl border border-line bg-surface px-4 py-5 shadow-lg"
-          role="status"
-          aria-live="polite"
-        >
+        <div className="rec-panel" role="status" aria-live="polite">
           {phase === 'starting' ? (
             <span className="text-muted">正在打开麦克风…</span>
           ) : (
             <>
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-3">
                 <span className="rec-dot" />
-                <span className="text-[28px] font-semibold tabular-nums">{formatElapsed(elapsed)}</span>
+                <span className="when text-[32px] leading-none">{formatElapsed(elapsed)}</span>
               </div>
               <span className={cancelArmed ? 'font-semibold text-danger' : 'text-muted'}>
                 {cancelArmed ? '松开手指，取消发送' : remaining <= 10 ? `还能说 ${remaining} 秒` : '松开发送，上滑取消'}
@@ -250,8 +246,8 @@ export function Composer({
           )}
         </div>
       )}
-      {note && <p className="mb-1.5 flex items-center gap-1 px-2 text-[13px] text-muted">{note}</p>}
-      {!micAvailable && <p className="mb-1.5 px-2 text-[13px] text-muted">可以用键盘上的语音输入</p>}
+      {note && <p className="mb-2 flex items-center gap-1.5 px-2 text-[14px] text-muted">{note}</p>}
+      {!micAvailable && <p className="mb-2 px-2 text-[14px] text-muted">可以用键盘上的语音输入</p>}
       <div className="flex items-end gap-2">
         <textarea
           ref={ta}

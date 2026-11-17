@@ -10,9 +10,7 @@ import { IconAddSquare, IconMoreVertical, IconShare } from './Icons'
 function Step({ n, children }: { n: number; children: ReactNode }) {
   return (
     <li className="flex gap-3">
-      <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-accent-soft text-[13px] font-bold text-accent-strong">
-        {n}
-      </span>
+      <span className="step-n">{n}</span>
       <span className="min-w-0 flex-1">{children}</span>
     </li>
   )
@@ -23,7 +21,7 @@ export function IosInstallSteps() {
     <ol className="flex flex-col gap-2.5 text-[15px]">
       <Step n={1}>用 Safari 打开这个网页（微信里请先点右上角 ··· → 在浏览器打开）</Step>
       <Step n={2}>
-        点屏幕下方的 <IconShare size={17} className="inline -mt-1 text-info" /> 分享按钮
+        点屏幕下方的 <IconShare size={17} className="inline -mt-1 text-accent" /> 分享按钮
       </Step>
       <Step n={3}>
         往下滑，选「添加到主屏幕」<IconAddSquare size={17} className="inline -mt-1 ml-0.5 text-muted" />
@@ -60,11 +58,11 @@ export function InstallGuide({ currentOnly = false }: { currentOnly?: boolean })
     <div className="flex flex-col gap-4">
       {blocks.map(b => (
         <div key={b.key}>
-          <div className="mb-2 text-[14px] font-semibold text-muted">{b.title}</div>
+          <div className="caps mb-2.5">{b.title}</div>
           {b.body}
         </div>
       ))}
-      <p className="text-[13px] text-muted">
+      <p className="hint">
         安卓建议把 Chrome 的电池设置改成「不受限制」，提醒才不会延迟。iPhone 的应用每次打开时可能会再问一次麦克风权限，这是正常的。
       </p>
     </div>
@@ -174,23 +172,26 @@ export function PushControl({
             {busy === 'enable' ? '正在开启…' : '开启通知'}
           </button>
           {isAndroid() && !isStandalone() && (
-            <p className="text-[13px] text-muted">建议先安装应用：没安装的网站，Chrome 可能会自动收回通知权限。</p>
+            <p className="hint">建议先安装应用：没安装的网站，Chrome 可能会自动收回通知权限。</p>
           )}
         </div>
       )
     case 'on':
       return (
         <div className="flex flex-col gap-3">
-          <p className="text-[15px] font-medium text-ok">这台手机已开启通知</p>
+          <p className="inline-flex items-center gap-2 text-[15px] font-semibold text-ok">
+            <span className="h-2 w-2 rounded-full bg-ok" aria-hidden="true" />
+            这台手机已开启通知
+          </p>
           {!compact && (
             <div className="flex flex-wrap gap-2">
               <button type="button" className="btn btn-sm" disabled={!!busy} onClick={() => void onTest()}>
                 {busy === 'test' ? '发送中…' : '发送测试通知'}
               </button>
-              <button type="button" className="btn btn-sm btn-outline" disabled={!!busy} onClick={onEnable}>
+              <button type="button" className="btn btn-sm" disabled={!!busy} onClick={onEnable}>
                 重新开启
               </button>
-              <button type="button" className="btn btn-sm btn-outline" disabled={!!busy} onClick={() => void onDisable()}>
+              <button type="button" className="btn btn-sm" disabled={!!busy} onClick={() => void onDisable()}>
                 关闭
               </button>
             </div>

@@ -1,5 +1,9 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+// hulicalendar's type: Familjen Grotesk for Latin and figures, Geist Mono for times and codes (self-hosted; Chinese
+// falls through to the system's PingFang SC / Noto Sans SC in index.css)
+import '@fontsource-variable/familjen-grotesk'
+import '@fontsource-variable/geist-mono'
 import './index.css'
 import { App } from './App'
 import { initServiceWorker } from './lib/push'

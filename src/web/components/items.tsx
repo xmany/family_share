@@ -1,4 +1,5 @@
-// Item card, kind icon, status pill and the accept / decline control.
+// Item rows (a section's items share one card, hairline between), kind icon, status pill and the accept / decline
+// control.
 
 import { useState, type ReactNode } from 'react'
 import type { Item, ItemKind, Member } from '../../shared/types'
@@ -9,7 +10,7 @@ import { Link } from '../lib/router'
 import { api, errorMessage } from '../lib/api'
 import { mergeItems } from '../lib/store'
 import { toast } from '../lib/toast'
-import { IconBell, IconClock, IconIdea, IconRequest, IconSnooze, IconTask } from './Icons'
+import { IconBell, IconCheck, IconClock, IconIdea, IconRequest, IconSnooze, IconTask } from './Icons'
 import { Avatar, Pill } from './ui'
 
 export function KindIcon({ kind, size = 20, className = '' }: { kind: ItemKind; size?: number; className?: string }) {
@@ -30,20 +31,29 @@ export function nameFor(memberId: string | null, members: Map<string, Member>, m
   return members.get(memberId)?.name ?? '家人'
 }
 
-export function ItemCard({
+/** One card holding a section's rows. `sky`: the section that waits on me, raised on the evening sky. */
+export function ItemList({ sky = false, children }: { sky?: boolean; children: ReactNode }) {
+  return <ul className={`${sky ? 'sky sky-dusk' : 'card'} overflow-hidden`}>{children}</ul>
+}
+
+export function ItemRow({
   item,
   members,
   meId,
   now,
   tz,
   footer,
+  note,
 }: {
   item: Item
   members: Map<string, Member>
   meId: string
   now: Date
   tz: string
+  /** controls under the row (e.g. 接受 / 做不了) */
   footer?: ReactNode
+  /** a line of context under the row */
+  note?: string
 }) {
   const due = dueInfo(item, now, tz)
   const closed = item.status === 'done' || item.status === 'dropped'
@@ -51,39 +61,48 @@ export function ItemCard({
   const snoozed = !closed && isSnoozed(item, now)
   const owner = item.ownerId ? members.get(item.ownerId) : undefined
   return (
-    <div className="card overflow-hidden">
-      <Link to={`/item/${encodeURIComponent(item.id)}`} className="flex items-start gap-3 px-3.5 py-3 active:bg-surface-2">
-        <KindIcon kind={item.kind} className={`mt-[3px] flex-none ${closed ? 'text-ok' : 'text-faint'}`} />
+    <li className="item-row">
+      <Link to={`/item/${encodeURIComponent(item.id)}`} className="item-row-link">
+        <span className="kind-tile" data-done={item.status === 'done' ? '' : undefined}>
+          {item.status === 'done' ? <IconCheck size={18} /> : <KindIcon kind={item.kind} size={18} />}
+        </span>
         <div className="min-w-0 flex-1">
-          <div className={`line-clamp-2 text-[16.5px] leading-snug ${closed ? 'text-muted line-through decoration-faint' : 'font-medium'}`}>
+          <div className={`item-title line-clamp-2 ${closed ? 'font-normal text-muted line-through decoration-faint' : ''}`}>
             {item.title}
           </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13.5px] text-muted">
+          <div className="item-meta">
             {item.kind === 'request' && item.requestedBy && (
               <span>
                 {nameFor(item.requestedBy, members, meId)} → {nameFor(item.ownerId, members, meId)}
               </span>
             )}
             {due && !closed && (
-              <span className={`inline-flex items-center gap-1 ${overdue ? 'font-semibold text-danger' : due.today ? 'font-semibold text-accent' : ''}`}>
-                <IconClock size={14} />
-                {due.label}
+              <span
+                className={`inline-flex items-center gap-1 ${overdue ? 'font-semibold text-danger' : due.today ? 'font-semibold text-accent-strong' : ''}`}
+              >
+                <IconClock size={14} className="flex-none" />
+                <span className="when">{due.label}</span>
               </span>
             )}
             {snoozed && item.snoozedUntil && (
               <span className="inline-flex items-center gap-1">
-                <IconSnooze size={14} />
-                推迟到 {formatInstantZh(item.snoozedUntil, now, tz)}
+                <IconSnooze size={14} className="flex-none" />
+                推迟到 <span className="when">{formatInstantZh(item.snoozedUntil, now, tz)}</span>
               </span>
             )}
-            {closed && item.completedAt && <span>{formatInstantZh(item.completedAt, now, tz)} 完成</span>}
+            {closed && item.completedAt && (
+              <span>
+                <span className="when">{formatInstantZh(item.completedAt, now, tz)}</span> 完成
+              </span>
+            )}
             <StatusPill item={item} overdue={overdue} />
           </div>
         </div>
         {owner && <Avatar member={owner} size={28} title={owner.name} />}
       </Link>
-      {footer && <div className="border-t border-line px-3.5 py-2.5">{footer}</div>}
-    </div>
+      {note && <p className="item-row-extra hint -mt-1.5">{note}</p>}
+      {footer && <div className="item-row-extra">{footer}</div>}
+    </li>
   )
 }
 
@@ -139,7 +158,7 @@ export function RespondControl({
           enterKeyHint="send"
         />
         <div className="flex gap-2">
-          <button type="button" className={`btn btn-outline flex-1 ${size}`} onClick={() => setMode('idle')} disabled={!!busy}>
+          <button type="button" className={`btn flex-1 ${size}`} onClick={() => setMode('idle')} disabled={!!busy}>
             取消
           </button>
           <button type="submit" className={`btn btn-danger flex-1 ${size}`} disabled={!!busy}>
@@ -154,7 +173,7 @@ export function RespondControl({
       <button type="button" className={`btn btn-primary flex-1 ${size}`} disabled={!!busy} onClick={() => void run('accept')}>
         {busy === 'accept' ? '处理中…' : '接受'}
       </button>
-      <button type="button" className={`btn btn-outline flex-1 ${size}`} disabled={!!busy} onClick={() => setMode('declining')}>
+      <button type="button" className={`btn flex-1 ${size}`} disabled={!!busy} onClick={() => setMode('declining')}>
         做不了
       </button>
     </div>

@@ -1,4 +1,4 @@
-// Simple 24px stroke icons (inline SVG, currentColor).
+// Simple 24px stroke icons (inline SVG, currentColor). As in hulicalendar: a 1.75 stroke at 20 px and up, 2 below.
 
 import type { ReactNode, SVGProps } from 'react'
 
@@ -12,7 +12,7 @@ function Svg({ size = 22, children, ...rest }: IconProps & { children: ReactNode
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={2}
+      strokeWidth={size >= 20 ? 1.75 : 2}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

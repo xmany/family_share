@@ -70,7 +70,7 @@ export function NewItemForm({
 
   return (
     <form
-      className="card flex flex-col gap-3.5 p-4"
+      className="card flex flex-col gap-4 p-5"
       onSubmit={e => {
         e.preventDefault()
         void submit()
@@ -84,11 +84,11 @@ export function NewItemForm({
             role="radio"
             aria-checked={kind === k.kind}
             aria-label={`${k.label}：${k.hint}`}
-            className={`btn btn-sm flex-col !items-start !py-2 text-left ${kind === k.kind ? 'btn-primary' : 'btn-outline'}`}
+            className="choice"
             onClick={() => setKind(k.kind)}
           >
-            <span className="text-[15px]">{k.label}</span>
-            <span className="text-[12px] opacity-75">{k.hint}</span>
+            <span className="choice-t">{k.label}</span>
+            <span className="choice-d">{k.hint}</span>
           </button>
         ))}
       </div>
@@ -151,7 +151,7 @@ export function NewItemForm({
         />
       </div>
       <div className="flex gap-2">
-        <button type="button" className="btn btn-outline flex-1" onClick={() => onDone(null)} disabled={busy}>
+        <button type="button" className="btn flex-1" onClick={() => onDone(null)} disabled={busy}>
           取消
         </button>
         <button type="submit" className="btn btn-primary flex-1" disabled={busy}>
