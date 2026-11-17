@@ -2,7 +2,7 @@
 // hold-to-talk mic button (press and hold to record, release to send, slide up > 60 px to cancel,
 // max 60 s, live timer). The mic is hidden when the server has no speech-to-text.
 
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { HoldToTalkRecorder, MAX_RECORDING_MS, RecorderError, recordingSupported, type RecordingResult } from '../lib/recorder'
 import { toast } from '../lib/toast'
 import { IconMic, IconSend } from './Icons'
@@ -24,10 +24,13 @@ export function Composer({
   onSendVoice,
   draft,
   onDraftConsumed,
+  note,
 }: {
   sttEnabled: boolean
   onSendText: (text: string) => void
   onSendVoice: (rec: RecordingResult) => void
+  /** A short line above the input, e.g. who will see what is sent from here */
+  note?: ReactNode
   /** Text to put into the input (e.g. a tapped example) */
   draft?: string | null
   onDraftConsumed?: () => void
@@ -247,6 +250,7 @@ export function Composer({
           )}
         </div>
       )}
+      {note && <p className="mb-1.5 flex items-center gap-1 px-2 text-[13px] text-muted">{note}</p>}
       {!micAvailable && <p className="mb-1.5 px-2 text-[13px] text-muted">可以用键盘上的语音输入</p>}
       <div className="flex items-end gap-2">
         <textarea

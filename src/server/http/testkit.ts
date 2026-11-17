@@ -30,6 +30,7 @@ export class FakeInterpreter implements Interpreter {
     const u = d.createUtterance(input.memberId, input.source, input.text, {
       replyTo: input.replyToUtteranceId ?? null,
       audioPath: input.audioPath ?? null,
+      visibility: input.visibility ?? 'family',
     })
     const item = d.createItem({ type: 'ai', memberId: input.memberId, utteranceId: u.id }, { kind: 'task', title: input.text.slice(0, 50) })
     d.finishUtterance(u.id, { status: 'done', reply: '好的，记下了' })

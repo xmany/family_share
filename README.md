@@ -8,7 +8,9 @@
 
 ## 它能做什么
 
-- **对话**：说话（按住麦克风）或打字，AI 把这句话变成看板上的改动，回一两句话说明它做了什么。每条改动都能 **撤销**。
+- **对话**：说话（按住麦克风）或打字，AI 把这句话变成看板上的改动，回一两句话说明它做了什么。每条改动都能 **撤销**。对话页右上角可以切换两个对话：
+  - **家里**：全家人都能看到你说的话和助手的回复，适合跟家人说话。
+  - **助手**（带锁）：只有你自己和助手看得到，适合「提醒我…」「帮我记一下…」这类只是交代事情的话。事情照样记到大家的看板上，请家人帮忙时对方照样收到通知。
 - **四种事项**：
   - **待办**：自己要做的事。
   - **请求**：请家人做的事，对方要点「接受」或「做不了」。
@@ -299,7 +301,8 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 ## 隐私
 
 - **数据存放**：所有数据都在你自己的机器上的 `DATA_DIR` 里。`family.db` 里是事项、对话、成员和通知记录，`audio/` 里是录音（只有服务器账号能读；默认一直保留，可以设 `AUDIO_KEEP_DAYS` 定期删除，见「运行 → 录音」）。App 本身没有任何统计或埋点，除了下面列出的服务，数据不会发到别处。
-- **Anthropic（Claude）**：会收到每句话的文字，以及当时的看板摘要（成员名字和别名、进行中的事项标题和备注、最近 8 句对话）。
+- **「助手」对话**：你在「助手」里说的话和助手的回复，其他家人在 App 里看不到（看板、实时更新、撤销都不会带出来）。它产生的事项在共享看板上，大家都能看到。这些话和其他数据一样存在 `family.db` 里，能登录这台服务器的人可以直接读数据库。从微信发给测试号的文字目前仍然显示在「家里」。
+- **Anthropic（Claude）**：会收到每句话的文字，以及当时的看板摘要（成员名字和别名、进行中的事项标题和备注、最近 8 句对话）。在「家里」说话时，摘要里只有「家里」的对话；在「助手」里说话时，还包括你自己在「助手」里说过的话，不会有别人的。
 - **OpenAI 或阿里云（语音识别）**：会收到录音，以及用来提高识别率的关键词（成员名字、别名和事项标题）。用本机 Whisper 时录音不出这台电脑。
 - **腾讯（微信）**：会看到模板消息的内容（每个字段大约 20 个字）、你发给测试号的文字，以及你的 openid。
 - **推送服务（Apple / Google / Mozilla）**：负责转交 App 通知。通知内容是端到端加密的，它们只看到加密数据和发送时间。
@@ -338,7 +341,7 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 
 ## English summary
 
-**family_share** is a self-hosted coordination app for one family. People speak or type in Chinese, and Claude turns each sentence into changes on a shared board: tasks, requests (another member must accept or decline), ideas and reminders. Every change can be undone. A deterministic scheduler on the server sends reminders, request follow-ups, a daily digest, stale-task nudges and a Sunday weekly review. Notifications go through Web Push from the installed PWA, with an optional WeChat Official Account test account (template messages, plus texting the assistant). All data stays in `DATA_DIR`: a SQLite database and the voice recordings.
+**family_share** is a self-hosted coordination app for one family. People speak or type in Chinese, and Claude turns each sentence into changes on a shared board: tasks, requests (another member must accept or decline), ideas and reminders. Every change can be undone. The chat screen has two chats: 家里 (the family chat, everyone sees what you say and the assistant's reply) and 助手 (private: only you see the conversation, while the items it creates still land on the shared board and requests still notify people). A deterministic scheduler on the server sends reminders, request follow-ups, a daily digest, stale-task nudges and a Sunday weekly review. Notifications go through Web Push from the installed PWA, with an optional WeChat Official Account test account (template messages, plus texting the assistant). All data stays in `DATA_DIR`: a SQLite database and the voice recordings.
 
 **Prerequisites:**
 - Node 24.

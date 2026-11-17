@@ -18,6 +18,7 @@ import type {
   Utterance,
   UtteranceSource,
   UtteranceStatus,
+  UtteranceVisibility,
 } from '../../shared/types'
 
 /** Who is making a change. For AI changes, memberId is the speaker and utteranceId links the change to what they said. */
@@ -115,6 +116,23 @@ export interface MemberPatch {
   language?: string
 }
 
+export interface NewUtteranceOptions {
+  /** The utterance this one answers. It must be in the same chat: a private one can only be answered by its owner, in private. */
+  replyTo?: string | null
+  audioPath?: string | null
+  /** Default 'family' */
+  visibility?: UtteranceVisibility
+}
+
+/**
+ * Which chat to read.
+ * - 'family' (default): the chat every member sees
+ * - { privateOf }: only that member's private chat with the assistant
+ * - { visibleTo }: everything that member can see — the family chat and their own private chat, in one timeline
+ * No scope returns another member's private utterances.
+ */
+export type UtteranceScope = 'family' | { privateOf: string } | { visibleTo: string }
+
 export interface FinishUtteranceInput {
   status: UtteranceStatus
   reply: string | null
@@ -149,6 +167,7 @@ export interface Domain {
   searchItems(query: SearchItemsQuery): Item[]
   listNotes(itemId: string): Note[]
   recentEvents(limit: number): ItemEvent[]
+  /** The board as this member sees it: `utterances` holds the family chat and this member's own private chat. */
   getBoard(memberId: string): BoardResponse
 
   // ---- writes
@@ -163,10 +182,16 @@ export interface Domain {
   cancelReminder(actor: Actor, notificationId: string): void
 
   // ---- utterances
-  createUtterance(memberId: string, source: UtteranceSource, text: string, opts?: { replyTo?: string | null; audioPath?: string | null }): Utterance
+  createUtterance(memberId: string, source: UtteranceSource, text: string, opts?: NewUtteranceOptions): Utterance
   finishUtterance(id: string, result: FinishUtteranceInput): Utterance
+  /** Any utterance by id, private ones included: callers that answer a member must check `visibility` themselves. */
   getUtterance(id: string): Utterance | null
-  recentUtterances(limit: number): Utterance[]
-  /** Reverts every event caused by the utterance (newest first), cancels notifications it scheduled, marks it 'undone'. */
+  /** The most recent utterances of a chat, oldest first. Without a scope: the family chat. */
+  recentUtterances(limit: number, scope?: UtteranceScope): Utterance[]
+  /**
+   * Reverts every event caused by the utterance (newest first), cancels notifications it scheduled, marks it 'undone'.
+   * A family utterance: by the member who said it or any adult. A private one: only by the member who said it
+   * (to anyone else it does not exist: not_found).
+   */
   undoUtterance(actor: Actor, utteranceId: string): UndoResponse
 }

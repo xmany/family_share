@@ -1,5 +1,8 @@
 // family_share schema (SQLite). Applied idempotently at startup by openDb().
 // Kept as a TS string so it survives bundling.
+// CREATE TABLE IF NOT EXISTS does nothing for a table that already exists: a column added here also needs a step in
+// migrate() (db.ts) for databases created before it, and nothing in this file may reference such a column outside
+// its own CREATE TABLE (an index on it would fail on an old database before migrate() runs).
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS family (
   id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -81,6 +84,7 @@ CREATE TABLE IF NOT EXISTS utterances (
   id              TEXT PRIMARY KEY,
   member_id       TEXT NOT NULL REFERENCES members(id),
   source          TEXT NOT NULL CHECK (source IN ('text', 'voice', 'clarification', 'wechat', 'whatsapp')),
+  visibility      TEXT NOT NULL DEFAULT 'family' CHECK (visibility IN ('family', 'private')),  -- private = only member_id may read it
   text            TEXT NOT NULL,
   reply           TEXT,
   status          TEXT NOT NULL CHECK (status IN ('processing', 'done', 'clarify', 'error', 'undone')),

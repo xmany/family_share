@@ -410,6 +410,42 @@
     border-bottom-left-radius: 6px;
   }
 
+  /* 对话: which chat is showing (家里 / 助手) */
+  .seg {
+    flex: none;
+    display: inline-flex;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--color-surface-2);
+  }
+  .seg-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 38px;
+    padding: 0 15px;
+    border-radius: 999px;
+    color: var(--color-muted);
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .seg-btn[aria-selected="true"] {
+    background: var(--color-surface);
+    color: var(--color-ink);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.1);
+  }
+  .seg-dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--color-danger);
+  }
+
   .chip {
     display: inline-flex;
     align-items: center;

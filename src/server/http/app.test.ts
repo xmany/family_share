@@ -260,7 +260,7 @@ describe('utterances', () => {
     const as = h.t.wife
     const r = await h.json('POST', '/api/utterances', { as, body: { text: '  明天买菜  ' } })
     expect(r.status).toBe(200)
-    expect(h.interpreter.calls).toEqual([{ memberId: as.id, text: '明天买菜', source: 'text', replyToUtteranceId: null }])
+    expect(h.interpreter.calls).toEqual([{ memberId: as.id, text: '明天买菜', source: 'text', visibility: 'family', replyToUtteranceId: null }])
     const uid = r.body.utterance.id
     expect(r.body.items[0].title).toBe('明天买菜')
 

@@ -15,6 +15,7 @@ import type {
   Note,
   ScheduledNotification,
   Utterance,
+  UtteranceVisibility,
 } from './types'
 
 export interface ApiError {
@@ -41,10 +42,19 @@ export interface MeResponse {
   sttEnabled: boolean
   /** Notification channels this server supports, e.g. ["webpush", "wechat"] */
   channels: string[]
+  /**
+   * This server keeps `visibility: 'private'` utterances private. A server from before the private chat does not
+   * send the field and would file such an utterance in the family chat (it ignores fields it does not know), so the
+   * web app offers the private chat only when this is true — e.g. not while a newly built web app is still being
+   * served by a server that has not been restarted yet.
+   */
+  privateChat?: boolean
 }
 
 // GET /api/board
-// Active items + items closed in the last 7 days, all members, and the 30 most recent utterances.
+// Active items + items closed in the last 7 days, all members, and the recent chat I can see: the 30 most recent
+// utterances of the family chat plus the 30 most recent of my own private chat with the assistant (oldest first).
+// Nobody else's private utterances are ever included.
 export interface BoardResponse {
   me: Member
   family: Family
@@ -62,14 +72,16 @@ export interface ItemDetailResponse {
   notifications: ScheduledNotification[]
 }
 
-// POST /api/utterances  { text, source?: 'text' | 'clarification' }
+// POST /api/utterances  { text, source?: 'text' | 'clarification', visibility?: 'family' | 'private' }
 export interface UtteranceBody {
   text: string
   source?: 'text' | 'clarification'
-  /** When answering a clarification: the utterance that asked */
+  /** Which chat this goes to (default 'family'). 'private' = only I and the assistant see it and its reply. */
+  visibility?: UtteranceVisibility
+  /** When answering a clarification: the utterance that asked (it must be in the same chat) */
   replyToUtteranceId?: string
 }
-// POST /api/utterances/voice  multipart/form-data: audio=<blob>, (optional) durationMs
+// POST /api/utterances/voice  multipart/form-data: audio=<blob>, (optional) durationMs, (optional) visibility
 // Both return UtteranceResponse. On STT failure: 422 with ApiError code "stt_failed".
 export interface UtteranceResponse {
   utterance: Utterance
@@ -228,6 +240,7 @@ export interface InviteResponse {
 }
 
 // Server-sent events: GET /api/stream  (text/event-stream, event name "message", data = ServerEvent JSON)
+// An 'utterance' event for a private utterance is sent only to the streams of the member who said it.
 export type ServerEvent =
   | { type: 'hello'; serverTime: string }
   | { type: 'board_changed'; itemIds: string[]; utteranceId?: string; byMemberId?: string | null }
