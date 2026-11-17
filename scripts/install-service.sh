@@ -69,8 +69,28 @@ mkdir -p "$HOME/Library/LaunchAgents" "$DIR/data/logs"
 chmod 700 "$DIR/data"
 printf '%s\n' "$PLIST_XML" > "$PLIST"
 plutil -lint "$PLIST" >/dev/null
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+DOMAIN="gui/$(id -u)"
+launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+# bootout returns while the old server is still shutting down (it gives in-flight work up to 10 s), and launchd
+# refuses to load a service it has not finished unloading: "Bootstrap failed: 5: Input/output error", which left
+# the server stopped. So wait until the old one is gone (up to 30 s), and retry the load in case it still was not.
+for _ in $(seq 1 150); do
+  launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+  sleep 0.2
+done
+LOADED=0
+for _ in 1 2 3 4 5; do
+  if BOOT_ERR="$(launchctl bootstrap "$DOMAIN" "$PLIST" 2>&1)"; then
+    LOADED=1
+    break
+  fi
+  sleep 2
+done
+if [ "$LOADED" != 1 ]; then
+  printf '%s\n' "$BOOT_ERR" >&2
+  echo "没有启动 / NOT started ($LABEL): 服务器现在是停着的，请再运行一次 / the server is stopped now, run this script again" >&2
+  exit 1
+fi
 sleep 2
 echo "已启动 / started ($LABEL). 日志 / log: $DIR/data/logs/server.log"
 tail -n 12 "$DIR/data/logs/server.log" 2>/dev/null || true
