@@ -53,8 +53,8 @@ export function LinkPage({ token }: { token: string }) {
     <div className="flex items-center gap-3 px-5 pt-6 pb-2">
       <LogoMark size={36} />
       <div>
-        <p className="font-semibold">家庭同步</p>
-        {data && <p className="text-[13px] text-muted">{data.family.name}</p>}
+        <p className="text-[17px] leading-tight font-[620]">家庭同步</p>
+        {data && <p className="hint">{data.family.name}</p>}
       </div>
     </div>
   )
@@ -64,7 +64,7 @@ export function LinkPage({ token }: { token: string }) {
       <div className="mx-auto flex w-full max-w-md flex-1 flex-col">
         {header}
         {error ? (
-          <div className="card mx-5 mt-4 p-4">
+          <div className="card mx-5 mt-4 p-5">
             <p className="text-[16px]">{error}</p>
           </div>
         ) : (
@@ -86,28 +86,30 @@ export function LinkPage({ token }: { token: string }) {
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col pb-[calc(env(safe-area-inset-bottom)+24px)]">
       {header}
       <div className="flex flex-col gap-4 px-5 pt-2">
-        <div className="card p-5">
-          <div className="flex items-center gap-2 text-[14px] text-muted">
-            <KindIcon kind={item.kind} size={18} />
-            <span>{KIND_LABEL[item.kind]}</span>
+        <div className="sky sky-dusk p-5">
+          <div className="flex flex-wrap items-center gap-2 text-[14px] text-muted">
+            <span className="kind-tile h-7 w-7 rounded-lg">
+              <KindIcon kind={item.kind} size={16} />
+            </span>
+            <span className="font-medium">{KIND_LABEL[item.kind]}</span>
             <StatusPill item={item} overdue={active && !!due?.overdue} />
           </div>
-          <h1 className="mt-2 text-[24px] leading-snug font-bold">{item.title}</h1>
+          <h1 className="mt-3 text-[24px] leading-[1.33] font-[620]">{item.title}</h1>
           {item.kind === 'request' && item.requestedBy && (
             <p className="mt-2 text-[16px]">
               {who(item.requestedBy, members, memberId)}请{who(item.ownerId, members, memberId)}帮忙
             </p>
           )}
           {due && (
-            <p className={`mt-2 inline-flex items-center gap-1.5 text-[16px] ${due.overdue && active ? 'text-danger' : ''}`}>
+            <p className={`mt-2 inline-flex items-center gap-1.5 text-[16px] ${due.overdue && active ? 'font-semibold text-danger' : ''}`}>
               <IconClock size={18} />
-              {due.label}
+              <span className="when">{due.label}</span>
             </p>
           )}
-          {item.details && <p className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5 text-[15px] whitespace-pre-wrap">{item.details}</p>}
+          {item.details && <p className="well mt-3 px-3.5 py-3 text-[15px] whitespace-pre-wrap text-ink-2">{item.details}</p>}
         </div>
 
-        {message && <p className="rounded-xl bg-ok-soft px-4 py-3 text-[16px] font-medium text-ok">{message}</p>}
+        {message && <p className="note bg-ok-soft text-[16px] font-semibold text-ok">{message}</p>}
 
         {canRespond && <RespondControl large onAccept={() => act('accept')} onDecline={m => act('decline', m)} />}
 
@@ -136,13 +138,13 @@ export function LinkPage({ token }: { token: string }) {
 
         {!active && !message && <p className="text-center text-[15px] text-muted">这件事已经{item.status === 'done' ? '完成' : '不做'}了。</p>}
 
-        <div className="mt-2 rounded-xl bg-surface-2 px-4 py-3 text-[14px] text-muted">
+        <div className="well mt-2 px-4 py-3 text-[15px] text-ink-2">
           {isWeChat() ? (
             <>想及时收到提醒？点右上角 ··· → 在浏览器打开，安装「家庭同步」App。</>
           ) : (
             <Link
               to={`/item/${encodeURIComponent(item.id)}`}
-              className="-my-3 flex min-h-[44px] items-center font-semibold text-accent"
+              className="-my-3 flex min-h-[44px] items-center font-semibold text-accent-strong underline decoration-faint underline-offset-4"
             >
               在「家庭同步」App 里打开
             </Link>

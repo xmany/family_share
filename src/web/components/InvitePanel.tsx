@@ -32,17 +32,17 @@ export function InvitePanel({ invite, tz, onClose }: { invite: InviteResponse; t
   }
 
   return (
-    <div className="card flex flex-col gap-3 p-4">
+    <div className="card flex flex-col gap-3 p-5">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-[16px] font-semibold">给{invite.member.name}的邀请</p>
-        <button type="button" className="icon-btn -mt-2 -mr-2" aria-label="关闭" onClick={onClose}>
+        <p className="text-[18px] leading-snug font-[620]">给{invite.member.name}的邀请</p>
+        <button type="button" className="icon-btn icon-btn-plain -mt-2 -mr-2" aria-label="关闭" onClick={onClose}>
           <IconClose size={20} />
         </button>
       </div>
-      <p className="text-[14px] text-muted">
+      <p className="text-[15px] text-ink-2">
         在{invite.member.name}的手机上打开这个链接：iPhone 用 Safari，安卓用 Chrome。也可以用新手机的相机扫下面的二维码。
       </p>
-      <div className="rounded-xl bg-surface-2 px-3 py-2.5 font-mono text-[13px] break-all select-all">{invite.inviteUrl}</div>
+      <div className="well px-3.5 py-3 font-mono text-[14px] leading-relaxed break-all select-all">{invite.inviteUrl}</div>
       <div className="flex gap-2">
         <button type="button" className="btn btn-primary flex-1" onClick={() => void copy()}>
           <IconCopy size={18} />
@@ -62,12 +62,12 @@ export function InvitePanel({ invite, tz, onClose }: { invite: InviteResponse; t
       {svg && (
         // an <img> (not injected markup): nothing in the SVG can ever run or style the page
         <img
-          className="mx-auto w-52 rounded-xl bg-white p-2"
+          className="mx-auto mt-1 w-52 rounded-xl border border-line bg-white p-2"
           src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`}
           alt="邀请链接二维码"
         />
       )}
-      <p className="text-[12.5px] text-muted">
+      <p className="hint">
         有效到 {formatInstantZh(invite.expiresAt, now(), tz)}，最多可用 5 次（iPhone 加到主屏幕后可能要在应用里再加入一次）。在微信里打开的话，先点右上角 ··· → 在浏览器打开。
       </p>
     </div>

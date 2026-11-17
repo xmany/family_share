@@ -96,16 +96,22 @@ function WeChatJoin({ onCopy, onJoinHere }: { onCopy: () => void; onJoinHere: ()
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col gap-5 px-5 py-10">
       <div className="flex flex-col items-center gap-3 text-center">
         <LogoMark size={72} />
-        <h1 className="text-[22px] font-bold">请在{ios ? ' Safari ' : '浏览器'}里打开这个邀请</h1>
-        <p className="text-[15px] text-muted">在微信里没法把「家庭同步」装到手机上，也收不到提醒。</p>
+        <h1 className="text-[24px] leading-snug font-[620]">请在{ios ? ' Safari ' : '浏览器'}里打开这个邀请</h1>
+        <p className="text-[15px] text-ink-2">在微信里没法把「家庭同步」装到手机上，也收不到提醒。</p>
       </div>
-      <ol className="card flex flex-col gap-2.5 p-4 text-[16px]">
-        <li>1. 点右上角的 ···</li>
-        <li>2. 选「{ios ? '在 Safari 中打开' : '在浏览器打开'}」</li>
-        <li>3. 在打开的页面里会自动加入家庭</li>
+      <ol className="card flex flex-col gap-3 p-5 text-[16px]">
+        <li className="flex gap-3">
+          <span className="step-n">1</span>点右上角的 ···
+        </li>
+        <li className="flex gap-3">
+          <span className="step-n">2</span>选「{ios ? '在 Safari 中打开' : '在浏览器打开'}」
+        </li>
+        <li className="flex gap-3">
+          <span className="step-n">3</span>在打开的页面里会自动加入家庭
+        </li>
       </ol>
       {!ios && (
-        <p className="text-[14px] text-muted">
+        <p className="hint">
           如果打开的不是 Chrome：点下面的按钮复制链接，再粘贴到 Chrome 的地址栏里打开。
         </p>
       )}
@@ -113,7 +119,7 @@ function WeChatJoin({ onCopy, onJoinHere }: { onCopy: () => void; onJoinHere: ()
         <button type="button" className="btn btn-primary btn-lg" onClick={onCopy}>
           复制邀请链接
         </button>
-        <button type="button" className="btn btn-ghost" onClick={onJoinHere}>
+        <button type="button" className="btn btn-link" onClick={onJoinHere}>
           先在微信里看看
         </button>
       </div>
@@ -149,17 +155,17 @@ export function SignedOut({ message }: { message?: string }) {
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col gap-5 px-5 py-12">
       <div className="flex flex-col items-center gap-3 text-center">
         <LogoMark size={72} />
-        <h1 className="text-[22px] font-bold">请用家人发给你的邀请链接加入</h1>
-        <p className="text-[15px] text-muted">家里已经在用的人可以在「设置 → 家人 → 邀请家人」生成链接，然后在这台手机上打开。</p>
+        <h1 className="text-[24px] leading-snug font-[620]">请用家人发给你的邀请链接加入</h1>
+        <p className="text-[15px] text-ink-2">家里已经在用的人可以在「设置 → 家人 → 邀请家人」生成链接，然后在这台手机上打开。</p>
       </div>
-      {message && <p className="rounded-xl bg-danger-soft px-3 py-2.5 text-[15px] text-danger">{message}</p>}
+      {message && <p className="note bg-danger-soft text-danger">{message}</p>}
       {iosApp && (
-        <p className="rounded-xl bg-info-soft px-3 py-2.5 text-[15px] text-info">
+        <p className="note bg-accent-soft text-accent-strong">
           从主屏幕打开的「家庭同步」和 Safari 是分开登录的。把邀请链接粘贴到下面，就能在这里登录。
         </p>
       )}
       <form
-        className="card flex flex-col gap-3 p-4"
+        className="card flex flex-col gap-3 p-5"
         onSubmit={e => {
           e.preventDefault()
           void submit()
@@ -179,7 +185,7 @@ export function SignedOut({ message }: { message?: string }) {
           value={text}
           onChange={e => setText(e.target.value)}
         />
-        {error && <p className="text-[14px] text-danger">{error}</p>}
+        {error && <p className="text-[15px] text-danger">{error}</p>}
         <button type="submit" className="btn btn-primary btn-lg" disabled={busy || !text.trim()}>
           {busy ? '正在加入…' : '加入'}
         </button>

@@ -42,8 +42,8 @@ export default defineConfig({
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        background_color: '#f5f1ea',
-        theme_color: '#f5f1ea',
+        background_color: '#f8f0e6',
+        theme_color: '#f8f0e6',
         icons: [
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },

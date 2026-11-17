@@ -29,8 +29,8 @@ function splitAliases(s: string): string[] {
 function Card({ title, children, footer }: { title: string; children: ReactNode; footer?: ReactNode }) {
   return (
     <section>
-      <h2 className="section-title">{title}</h2>
-      <div className="card flex flex-col gap-3.5 p-4">
+      <h2 className="caps group-label">{title}</h2>
+      <div className="card flex flex-col gap-4 p-5">
         {children}
         {footer}
       </div>
@@ -76,7 +76,7 @@ export function SettingsPage() {
     <div className="page">
       <PageHeader title="设置" />
       <div className="page-pad -mt-2">
-        {loadError && <p className="mt-2 px-1 text-[14px] text-danger">{loadError}</p>}
+        {loadError && <p className="note mt-3 bg-danger-soft text-danger">{loadError}</p>}
         <ProfileCard me={settings?.me ?? me} onSave={save} />
         <TimesCard me={settings?.me ?? me} onSave={save} />
         <NotificationsCard vapidKey={app.me?.vapidPublicKey ?? null} settings={settings} onChanged={() => void load()} />
@@ -84,7 +84,7 @@ export function SettingsPage() {
         <FamilyCard me={me} members={app.board?.members ?? []} tz={tz} />
         <InstallCard />
         <LogoutCard />
-        <p className="mt-6 text-center text-[12px] text-faint">
+        <p className="hint mt-8 text-center">
           {app.board?.family.name ?? '家庭同步'} · {tz}
         </p>
       </div>
@@ -126,7 +126,7 @@ function ProfileCard({ me, onSave }: { me: Member; onSave: (b: SettingsBody) => 
           placeholder="比如：老婆、孩子妈、她"
           onChange={e => setAliases(e.target.value)}
         />
-        <p className="mt-1 text-[13px] text-muted">助手听到这些称呼时，就知道是在说你。</p>
+        <p className="hint mt-1.5">助手听到这些称呼时，就知道是在说你。</p>
       </div>
       <button
         type="button"
@@ -167,22 +167,23 @@ function TimesCard({ me, onSave }: { me: Member; onSave: (b: SettingsBody) => Pr
           <span className="text-muted">到</span>
           <input className="input flex-1" type="time" aria-label="免打扰结束" value={quietEnd} onChange={e => setQuietEnd(e.target.value)} />
         </div>
-        <p className="mt-1 text-[13px] text-muted">快到时间的事和你特意设的提醒，免打扰时也会发。</p>
+        <p className="hint mt-1.5">快到时间的事和你特意设的提醒，免打扰时也会发。</p>
       </div>
       <div>
-        <label className="flex min-h-[44px] items-center justify-between gap-3">
-          <span>每天发一条摘要</span>
+        <label className="flex min-h-[44px] items-center justify-between gap-3 border-t border-line pt-4">
+          <span className="font-semibold">每天发一条摘要</span>
           <input
             type="checkbox"
-            className="h-6 w-6 accent-[var(--color-accent)]"
+            role="switch"
+            className="switch"
             checked={digestOn}
             onChange={e => setDigestOn(e.target.checked)}
           />
         </label>
         {digestOn && (
-          <input className="input mt-1" type="time" aria-label="摘要时间" value={digestTime} onChange={e => setDigestTime(e.target.value)} />
+          <input className="input mt-2" type="time" aria-label="摘要时间" value={digestTime} onChange={e => setDigestTime(e.target.value)} />
         )}
-        <p className="mt-1 text-[13px] text-muted">今天要做的、过期的、等你回复的，一条消息说清楚。</p>
+        <p className="hint mt-1.5">今天要做的、过期的、等你回复的，一条消息说清楚。</p>
       </div>
       <button
         type="button"
@@ -213,9 +214,9 @@ function NotificationsCard({
     <Card title="通知">
       <PushControl vapidKey={vapidKey} onChanged={onChanged} />
       {settings && (
-        <div className="rounded-xl bg-surface-2 px-3 py-2.5 text-[14px]">
+        <div className="well px-3.5 py-3 text-[14px]">
           <p>
-            已开启通知的设备：<b>{settings.pushDevices}</b> 台
+            已开启通知的设备：<b className="when">{settings.pushDevices}</b> 台
           </p>
           {settings.pushDevices > 0 && (
             <p className={settings.pushHealthy ? 'text-ok' : 'text-warn'}>
@@ -261,7 +262,7 @@ function WechatCard({
   if (!w.available) {
     return (
       <Card title="微信提醒">
-        <p className="text-[14px] text-muted">
+        <p className="hint">
           还没有配置微信提醒。管理员在服务器上填好微信公众号测试号（WECHAT_APPID / WECHAT_APPSECRET / WECHAT_TOKEN / WECHAT_TEMPLATE_ID）后，这里就能绑定微信，在 App 通知收不到时用微信提醒。
         </p>
       </Card>
@@ -283,8 +284,8 @@ function WechatCard({
   return (
     <Card title="微信提醒">
       <div className="flex items-center justify-between gap-3">
-        <span>绑定状态</span>
-        <span className={w.bound ? 'font-semibold text-ok' : 'text-muted'}>{w.bound ? '已绑定' : '未绑定'}</span>
+        <span className="font-semibold">绑定状态</span>
+        <span className={`pill ${w.bound ? 'tone-ok' : ''}`}>{w.bound ? '已绑定' : '未绑定'}</span>
       </div>
       <div>
         <label className="label" htmlFor="wechat-mode">
@@ -307,14 +308,14 @@ function WechatCard({
         </select>
       </div>
       {bind ? (
-        <div className="flex flex-col gap-2 rounded-xl bg-surface-2 p-3">
-          <p className="text-[14px] text-muted">绑定码（30 分钟内有效）</p>
-          <p className="text-[32px] font-bold tracking-[0.2em] tabular-nums select-all">{bind.code}</p>
+        <div className="well flex flex-col gap-2 p-4">
+          <p className="caps">绑定码（30 分钟内有效）</p>
+          <p className="when text-[32px] leading-tight font-semibold tracking-[0.2em] select-all">{bind.code}</p>
           <p className="text-[15px]">{bind.instructions}</p>
           {w.followQrUrl && (
-            <img src={w.followQrUrl} alt="测试号二维码" className="mx-auto w-48 rounded-lg bg-white p-1" />
+            <img src={w.followQrUrl} alt="测试号二维码" className="mx-auto w-48 rounded-xl bg-white p-1.5" />
           )}
-          <p className="text-[13px] text-muted">
+          <p className="hint">
             {w.followQrUrl ? '用微信扫码关注测试号，' : '在微信里关注测试号，'}然后发送上面的文字。有效到 {formatInstantZh(bind.expiresAt, now(), tz)}。
           </p>
         </div>
@@ -366,17 +367,17 @@ function FamilyCard({ me, members, tz }: { me: Member; members: Member[]; tz: st
 
   return (
     <section>
-      <h2 className="section-title">家人</h2>
+      <h2 className="caps group-label">家人</h2>
       <div className="card overflow-hidden">
         {members.map(m => (
           <div key={m.id} className="list-row">
-            <Avatar member={m} size={36} />
+            <Avatar member={m} size={38} />
             <div className="min-w-0 flex-1">
-              <p className="font-medium">
+              <p className="font-semibold">
                 {m.name}
-                {m.id === me.id && <span className="ml-1.5 text-[13px] font-normal text-muted">（我）</span>}
+                {m.id === me.id && <span className="ml-1.5 text-[14px] font-normal text-muted">（我）</span>}
               </p>
-              <p className="truncate text-[13px] text-muted">
+              <p className="hint truncate">
                 {ROLE_LABEL[m.role]}
                 {m.aliases.length > 0 && ` · ${m.aliases.join('、')}`}
               </p>
@@ -384,7 +385,7 @@ function FamilyCard({ me, members, tz }: { me: Member; members: Member[]; tz: st
             {isAdult && (
               <button
                 type="button"
-                className="btn btn-sm btn-ghost -mr-2"
+                className="btn btn-sm btn-link -mr-3"
                 disabled={busy === m.id}
                 onClick={() => void reinvite(m)}
                 aria-label={`为${m.name}的手机重新生成邀请`}
@@ -397,7 +398,7 @@ function FamilyCard({ me, members, tz }: { me: Member; members: Member[]; tz: st
       </div>
 
       {isAdult && (
-        <p className="mt-2 px-1 text-[13px] text-muted">
+        <p className="hint mt-2.5 px-1">
           换了手机、或从主屏幕打开时需要重新登录：点「重新邀请」，把新链接在那台手机上打开（也可以粘贴到应用的登录页）。
         </p>
       )}
@@ -409,7 +410,7 @@ function FamilyCard({ me, members, tz }: { me: Member; members: Member[]; tz: st
       )}
 
       {isAdult && !adding && (
-        <button type="button" className="btn btn-outline mt-3 w-full" onClick={() => setAdding(true)}>
+        <button type="button" className="btn mt-3 w-full" onClick={() => setAdding(true)}>
           <IconPlus size={18} />
           邀请家人
         </button>
@@ -417,7 +418,7 @@ function FamilyCard({ me, members, tz }: { me: Member; members: Member[]; tz: st
 
       {isAdult && adding && (
         <form
-          className="card mt-3 flex flex-col gap-3.5 p-4"
+          className="card mt-3 flex flex-col gap-4 p-5"
           onSubmit={e => {
             e.preventDefault()
             void create()
@@ -451,22 +452,16 @@ function FamilyCard({ me, members, tz }: { me: Member; members: Member[]; tz: st
           </div>
           <div>
             <span className="label">身份</span>
-            <div className="flex gap-2">
+            <div className="seg seg-fill" role="group" aria-label="身份">
               {(['adult', 'kid', 'relative'] as MemberRole[]).map(r => (
-                <button
-                  key={r}
-                  type="button"
-                  className={`btn flex-1 ${role === r ? 'btn-primary' : 'btn-outline'}`}
-                  aria-pressed={role === r}
-                  onClick={() => setRole(r)}
-                >
+                <button key={r} type="button" className="seg-btn" aria-pressed={role === r} onClick={() => setRole(r)}>
                   {ROLE_LABEL[r]}
                 </button>
               ))}
             </div>
           </div>
           <div className="flex gap-2">
-            <button type="button" className="btn btn-outline flex-1" onClick={() => setAdding(false)} disabled={busy === 'create'}>
+            <button type="button" className="btn flex-1" onClick={() => setAdding(false)} disabled={busy === 'create'}>
               取消
             </button>
             <button type="submit" className="btn btn-primary flex-1" disabled={busy === 'create' || !name.trim()}>
@@ -484,15 +479,15 @@ function InstallCard() {
   const [open, setOpen] = useState(!standalone)
   return (
     <section>
-      <h2 className="section-title">安装到手机</h2>
-      <div className="card p-4">
-        {standalone && <p className="text-[15px] text-ok">已经从主屏幕打开，安装好了。</p>}
+      <h2 className="caps group-label">安装到手机</h2>
+      <div className="card p-5">
+        {standalone && <p className="text-[15px] font-medium text-ok">已经从主屏幕打开，安装好了。</p>}
         {open ? (
           <div className={standalone ? 'mt-3' : ''}>
             <InstallGuide />
           </div>
         ) : (
-          <button type="button" className="btn btn-sm btn-ghost mt-1 -ml-2" onClick={() => setOpen(true)}>
+          <button type="button" className="btn btn-sm btn-link mt-1 -ml-3" onClick={() => setOpen(true)}>
             查看安装方法
           </button>
         )}
@@ -517,8 +512,8 @@ function LogoutCard() {
     navigate('/', { replace: true })
   }
   return (
-    <div className="mt-6">
-      <button type="button" className={`btn w-full ${confirming ? 'btn-danger' : 'btn-outline'}`} disabled={busy} onClick={() => void logout()}>
+    <div className="mt-8">
+      <button type="button" className={`btn w-full ${confirming ? 'btn-danger' : 'btn-danger-text'}`} disabled={busy} onClick={() => void logout()}>
         <IconLogout size={18} />
         {busy ? '正在退出…' : confirming ? '确定退出？这台手机将不再收到通知' : '退出登录'}
       </button>

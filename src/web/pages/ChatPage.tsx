@@ -231,7 +231,7 @@ export function ChatPage() {
         note={
           view === 'private' ? (
             <>
-              <IconLock size={13} className="flex-none" />
+              <IconLock size={14} className="flex-none" />
               只有你和助手看得到
             </>
           ) : undefined
@@ -265,14 +265,14 @@ function ChatSwitch({
 }
 
 function TimeLabel({ text }: { text: string }) {
-  return <div className="py-3 text-center text-[12.5px] text-faint">{text}</div>
+  return <div className="time-sep">{text}</div>
 }
 
 function SpeakerLine({ member }: { member: Member | undefined }) {
   return (
-    <div className="mb-1 flex items-center gap-2 pl-0.5">
+    <div className="mb-1.5 flex items-center gap-2 pl-0.5">
       <Avatar member={member} size={26} />
-      <span className="text-[13px] font-medium text-muted">{member?.name ?? '家人'}</span>
+      <span className="text-[14px] font-medium text-muted">{member?.name ?? '家人'}</span>
     </div>
   )
 }
@@ -308,7 +308,7 @@ function UtteranceView({
       {mine ? (
         <div className="flex justify-end">
           <div className={`bubble bubble-me ${u.status === 'undone' ? 'opacity-60' : ''}`}>
-            {u.source === 'voice' && <IconMic size={15} className="mr-1 inline -mt-0.5 opacity-80" />}
+            {u.source === 'voice' && <IconMic size={15} className="mr-1 inline -mt-0.5 text-accent" />}
             {u.text || (u.source === 'voice' ? '（语音）' : '')}
           </div>
         </div>
@@ -324,7 +324,7 @@ function UtteranceView({
         </div>
       )}
 
-      <div className={`mt-1.5 flex flex-col items-start gap-1.5 ${mine ? '' : 'pl-[34px]'}`}>
+      <div className={`mt-2 flex flex-col items-start gap-2 ${mine ? '' : 'pl-[34px]'}`}>
         {u.status === 'processing' ? (
           <div className="bubble bubble-reply text-muted">
             处理中<Dots />
@@ -338,7 +338,7 @@ function UtteranceView({
         {options.length > 0 && canAnswer && (
           <div className="flex flex-wrap gap-2 pt-0.5">
             {options.map(opt => (
-              <button key={opt} type="button" className="chip" onClick={() => onAnswer(opt)}>
+              <button key={opt} type="button" className="chip chip-answer" onClick={() => onAnswer(opt)}>
                 {opt}
               </button>
             ))}
@@ -384,12 +384,12 @@ function ChangesCard({ u, mine }: { u: Utterance; mine: boolean }) {
 
   return (
     <div className="card w-full max-w-[92%] overflow-hidden">
-      <div className="flex items-center justify-between gap-2 px-3.5 pt-2.5 pb-1">
-        <span className="text-[13px] font-semibold text-muted">{undone ? '改动（已撤销）' : '改动'}</span>
+      <div className="flex min-h-[44px] items-center justify-between gap-2 py-1 pr-1.5 pl-4">
+        <span className="caps">{undone ? '改动（已撤销）' : '改动'}</span>
         {canUndo && (
           <button
             type="button"
-            className={`btn btn-sm -my-2 -mr-1.5 ${confirming ? 'btn-danger' : 'btn-ghost'}`}
+            className={`btn btn-sm ${confirming ? 'btn-danger' : 'btn-ghost'}`}
             disabled={busy}
             onClick={() => void undo()}
           >
@@ -398,25 +398,27 @@ function ChangesCard({ u, mine }: { u: Utterance; mine: boolean }) {
           </button>
         )}
       </div>
-      <ul className="pb-1">
+      <ul>
         {u.changes.map(c => {
           const inner = (
             <>
-              <span className={`min-w-0 flex-1 text-[15px] leading-snug ${undone ? 'text-muted line-through' : ''}`}>{c.summary}</span>
+              <span className={`min-w-0 flex-1 text-[15px] leading-snug ${undone ? 'text-muted line-through decoration-faint' : ''}`}>
+                {c.summary}
+              </span>
               {c.itemId && <IconChevron size={18} className="flex-none text-faint" />}
             </>
           )
           return (
-            <li key={c.eventId}>
+            <li key={c.eventId} className="border-t border-line">
               {c.itemId ? (
                 <Link
                   to={`/item/${encodeURIComponent(c.itemId)}`}
-                  className="flex min-h-[44px] items-center gap-2 px-3.5 py-2 active:bg-surface-2"
+                  className="flex min-h-[48px] items-center gap-2 px-4 py-2.5 active:bg-surface-2"
                 >
                   {inner}
                 </Link>
               ) : (
-                <div className="flex min-h-[44px] items-center gap-2 px-3.5 py-2">{inner}</div>
+                <div className="flex min-h-[48px] items-center gap-2 px-4 py-2.5">{inner}</div>
               )}
             </li>
           )
@@ -433,7 +435,7 @@ function PendingView({ p, onRetry, onDismiss }: { p: Pending; onRetry: () => voi
         <div className="bubble bubble-me">
           {p.kind === 'voice' ? (
             <>
-              <IconMic size={15} className="mr-1 inline -mt-0.5 opacity-80" />
+              <IconMic size={15} className="mr-1 inline -mt-0.5 text-accent" />
               语音
             </>
           ) : (
@@ -441,7 +443,7 @@ function PendingView({ p, onRetry, onDismiss }: { p: Pending; onRetry: () => voi
           )}
         </div>
       </div>
-      <div className="mt-1.5 flex flex-col items-start gap-1.5">
+      <div className="mt-2 flex flex-col items-start gap-2">
         {p.status === 'sending' ? (
           <div className="bubble bubble-reply text-muted">
             {p.kind === 'voice' ? '正在听' : '处理中'}
@@ -468,22 +470,24 @@ function PendingView({ p, onRetry, onDismiss }: { p: Pending; onRetry: () => voi
 function EmptyChat({ view, onPick, sttEnabled }: { view: UtteranceVisibility; onPick: (text: string) => void; sttEnabled: boolean }) {
   const isPrivate = view === 'private'
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 py-10 text-center">
-      <p className="text-[18px] font-semibold">{isPrivate ? '只跟助手说' : '说一句话，家里的事就安排好了'}</p>
-      {isPrivate && (
-        <p className="text-[15px] text-muted">
-          这里说的话和助手的回复，只有你自己看得到。事情照样记到大家的看板上，请家人帮忙时他们会收到通知。
+    <div className="flex flex-1 flex-col justify-center py-6">
+      <div className="sky sky-dusk flex flex-col gap-3 p-5">
+        <p className="text-[20px] leading-snug font-[620]">{isPrivate ? '只跟助手说' : '说一句话，家里的事就安排好了'}</p>
+        {isPrivate && (
+          <p className="text-[15px] text-ink-2">
+            这里说的话和助手的回复，只有你自己看得到。事情照样记到大家的看板上，请家人帮忙时他们会收到通知。
+          </p>
+        )}
+        <p className="text-[15px] text-ink-2">
+          {sttEnabled ? '打字，或按住麦克风说话。' : '打字，或用键盘上的语音输入。'}比如：
         </p>
-      )}
-      <p className="text-[15px] text-muted">
-        {sttEnabled ? '打字，或按住麦克风说话。' : '打字，或用键盘上的语音输入。'}比如：
-      </p>
-      <div className="flex flex-col items-center gap-2">
-        {(isPrivate ? PRIVATE_EXAMPLES : EXAMPLES).map(ex => (
-          <button key={ex} type="button" className="chip" onClick={() => onPick(ex)}>
-            {ex}
-          </button>
-        ))}
+        <div className="mt-1 flex flex-col items-start gap-2">
+          {(isPrivate ? PRIVATE_EXAMPLES : EXAMPLES).map(ex => (
+            <button key={ex} type="button" className="chip" onClick={() => onPick(ex)}>
+              {ex}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -519,24 +523,24 @@ function SetupNudge({ vapidKey, name }: { vapidKey: string | null; name: string 
 
   if (joined) {
     return (
-      <div className="card mt-2 flex flex-col gap-4 p-4">
+      <div className="sky sky-dawn mt-3 flex flex-col gap-5 p-5">
         <div>
-          <p className="text-[18px] font-semibold">欢迎，{name}！</p>
-          <p className="mt-1 text-[15px] text-muted">两步设置好，家人找你时就能马上收到提醒。</p>
+          <p className="text-[20px] leading-snug font-[620]">欢迎，{name}！</p>
+          <p className="mt-1 text-[15px] text-ink-2">两步设置好，家人找你时就能马上收到提醒。</p>
         </div>
         {!standalone && (
           <div>
-            <p className="mb-2 font-semibold">第一步：添加到主屏幕</p>
+            <p className="mb-2.5 font-semibold">第一步：添加到主屏幕</p>
             <InstallGuide currentOnly />
           </div>
         )}
         <div>
-          <p className="mb-2 font-semibold">{standalone ? '开启通知' : '第二步：开启通知'}</p>
+          <p className="mb-2.5 font-semibold">{standalone ? '开启通知' : '第二步：开启通知'}</p>
           <PushControl vapidKey={vapidKey} compact />
         </div>
         <button
           type="button"
-          className="btn btn-outline"
+          className="btn"
           onClick={() => {
             writeStorage('session', JOINED_KEY, null)
             setJoined(false)
@@ -557,7 +561,7 @@ function SetupNudge({ vapidKey, name }: { vapidKey: string | null; name: string 
 
   if (state === 'off') {
     return (
-      <div className="card mt-2 flex flex-col gap-3 p-4">
+      <div className="card mt-3 flex flex-col gap-3 p-5">
         <p className="text-[15px]">开启通知，家人请你帮忙、事情快到时间时，手机会提醒你。</p>
         <PushControl vapidKey={vapidKey} compact />
         <button type="button" className="btn btn-sm btn-ghost self-start" onClick={later}>
@@ -568,7 +572,7 @@ function SetupNudge({ vapidKey, name }: { vapidKey: string | null; name: string 
   }
   if (state === 'needs_install') {
     return (
-      <div className="card mt-2 flex flex-col gap-3 p-4">
+      <div className="card mt-3 flex flex-col gap-3 p-5">
         <p className="text-[15px]">把「家庭同步」添加到主屏幕，才能收到提醒。</p>
         {showSteps && <IosInstallSteps />}
         <div className="flex gap-2">

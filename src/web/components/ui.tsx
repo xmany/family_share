@@ -7,14 +7,32 @@ import { goBack } from '../lib/router'
 import { useToast } from '../lib/toast'
 import { isWeChat } from '../lib/platform'
 import { IconAlert, IconBack } from './Icons'
+import { LogoMark } from './Logo'
+
+/**
+ * The server hands members colours from its palette (MEMBER_PALETTE in server/domain/domain.ts); each one picks a soft
+ * tone of the design system here, so avatars stay legible in light and dark. A colour set by hand keeps its own fill.
+ */
+const AVATAR_TONES: Record<string, string> = {
+  '#3b82f6': 'blue',
+  '#ec4899': 'pink',
+  '#10b981': 'green',
+  '#f59e0b': 'amber',
+  '#8b5cf6': 'violet',
+  '#06b6d4': 'teal',
+  '#ef4444': 'red',
+  '#84cc16': 'lime',
+}
 
 export function Avatar({ member, size = 32, title }: { member: Member | null | undefined; size?: number; title?: string }) {
   const name = member?.name ?? '?'
   const text = avatarText(name)
   const len = Array.from(text).length
+  const color = member?.color?.trim().toLowerCase()
+  const tone = color ? AVATAR_TONES[color] : undefined
   return (
     <span
-      className="avatar"
+      className={`avatar${tone ? ` av-${tone}` : ''}`}
       title={title ?? name}
       aria-hidden={title ? undefined : true}
       style={{
@@ -22,7 +40,7 @@ export function Avatar({ member, size = 32, title }: { member: Member | null | u
         height: size,
         fontSize: Math.round(size * (len > 1 ? 0.36 : 0.46)),
         letterSpacing: len > 1 ? '-0.02em' : undefined,
-        background: member?.color ?? 'var(--color-faint)',
+        ...(color && !tone ? { background: color, color: '#fff', boxShadow: 'none' } : {}),
       }}
     >
       {text}
@@ -38,6 +56,7 @@ export function Spinner({ className = '' }: { className?: string }) {
   return <span className={`spinner inline-block ${className}`} role="status" aria-label="加载中" />
 }
 
+/** The app bar: the mark and the page's name on top-level pages, a back button on the pages below them. */
 export function PageHeader({
   title,
   back,
@@ -49,14 +68,16 @@ export function PageHeader({
   right?: ReactNode
 }) {
   return (
-    <header className="page-header">
-      {back && (
+    <header className="appbar">
+      {back ? (
         <button type="button" className="icon-btn -ml-1" aria-label="返回" onClick={() => goBack(back)}>
-          <IconBack size={26} />
+          <IconBack size={20} />
         </button>
+      ) : (
+        <LogoMark size={28} />
       )}
-      <h1 className={back ? 'flex-1 truncate text-[18px] font-semibold' : 'page-title flex-1 truncate'}>{title}</h1>
-      {right}
+      <h1 className="appbar-title">{title}</h1>
+      {right && <div className="appbar-actions">{right}</div>}
     </header>
   )
 }
@@ -85,21 +106,21 @@ export function Section({
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <p className="px-1 py-2 text-[15px] text-muted">{children}</p>
+  return <p className="empty">{children}</p>
 }
 
 export function LoadingScreen({ label = '加载中…' }: { label?: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-muted">
       <Spinner />
-      <span className="text-sm">{label}</span>
+      <span className="text-[14px]">{label}</span>
     </div>
   )
 }
 
 export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="card mx-4 mt-6 flex flex-col items-start gap-3 p-4">
+    <div className="card mx-4 mt-6 flex flex-col items-start gap-3 p-5">
       <div className="flex items-start gap-2 text-danger">
         <IconAlert size={20} className="mt-0.5 flex-none" />
         <span>{message}</span>
