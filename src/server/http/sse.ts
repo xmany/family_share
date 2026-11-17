@@ -1,5 +1,6 @@
-// GET /api/stream — Server-Sent Events: `hello`, then every Bus `server_event`, plus `ping` every 25 s.
-// Events use the default event name ("message"); data is the ServerEvent JSON.
+// GET /api/stream — Server-Sent Events: `hello`, then every Bus `server_event` this member may see, plus `ping`
+// every 25 s. Events use the default event name ("message"); data is the ServerEvent JSON.
+// A private utterance (a member's own chat with the assistant) goes only to that member's streams.
 // The session is re-checked before every event and ping: a revoked or expired session (lost phone,
 // `npm run family -- revoke`) ends the stream instead of receiving the family's utterances indefinitely.
 
@@ -25,6 +26,15 @@ export class StreamRegistry {
   }
 }
 
+/**
+ * Whether a stream opened by `memberId` gets this event. Everything is for the whole family except a private
+ * utterance, which only its speaker receives; a stream with no known member never gets one.
+ */
+export function eventVisibleTo(e: ServerEvent, memberId: string | null | undefined): boolean {
+  if (e.type !== 'utterance' || e.utterance.visibility !== 'private') return true
+  return !!memberId && e.utterance.memberId === memberId
+}
+
 const encoder = new TextEncoder()
 const frame = (e: ServerEvent) => encoder.encode(`data: ${JSON.stringify(e)}\n\n`)
 
@@ -35,6 +45,8 @@ export function sseResponse(opts: {
   registry?: StreamRegistry
   pingMs?: number
   headers?: Headers
+  /** The signed-in member this stream belongs to: decides which events it gets (eventVisibleTo) */
+  memberId?: string | null
   /** Re-checked before each event and ping; returning false ends the stream */
   isAuthorized?: () => boolean
 }): Response {
@@ -61,7 +73,9 @@ export function sseResponse(opts: {
           stop()
         }
       }
-      const onEvent = (e: ServerEvent) => send(e)
+      const onEvent = (e: ServerEvent) => {
+        if (eventVisibleTo(e, opts.memberId)) send(e)
+      }
       const timer = setInterval(() => send({ type: 'ping' }), opts.pingMs ?? SSE_PING_MS)
       timer.unref?.()
       let unregister: (() => void) | null = null

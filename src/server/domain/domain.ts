@@ -16,6 +16,7 @@ import type {
   Utterance,
   UtteranceSource,
   UtteranceStatus,
+  UtteranceVisibility,
 } from '../../shared/types'
 import { ACTIVE_STATUSES, CLOSED_STATUSES } from '../../shared/types'
 import type { Bus } from '../bus'
@@ -33,6 +34,7 @@ import type {
   CreateItemInput,
   Domain,
   FinishUtteranceInput,
+  UtteranceScope,
   MemberPatch,
   NewMemberInput,
   SearchItemsQuery,
@@ -124,6 +126,7 @@ const STATUSES: readonly ItemStatus[] = [...ACTIVE_STATUSES, ...CLOSED_STATUSES]
 const PRIORITIES: readonly Priority[] = ['low', 'normal', 'high']
 const ROLES: readonly MemberRole[] = ['adult', 'kid', 'relative']
 const SOURCES: readonly UtteranceSource[] = ['text', 'voice', 'clarification', 'wechat', 'whatsapp']
+const VISIBILITIES: readonly UtteranceVisibility[] = ['family', 'private']
 const UTTERANCE_STATUSES: readonly UtteranceStatus[] = ['processing', 'done', 'clarify', 'error', 'undone']
 
 /** Item fields that events record in payload.before / payload.after (and undo may revert). */
@@ -917,7 +920,10 @@ export function createDomain(deps: DomainDeps): Domain {
 
   function undoUtteranceTx(tx: Tx, utteranceId: string): { utteranceId: string; itemIds: string[]; existing: string[] } {
     const u = getUtteranceRow(db, utteranceId)
-    if (!u) throw new DomainError('not_found', `找不到这条消息（${utteranceId}）`)
+    // a private utterance exists only for the member who said it: the same answer as for an unknown id
+    if (!u || (u.visibility === 'private' && u.member_id !== tx.actor.memberId)) {
+      throw new DomainError('not_found', `找不到这条消息（${utteranceId}）`)
+    }
     const actorMember = tx.actor.memberId ? tx.members.find(m => m.id === tx.actor.memberId) : undefined
     if (!actorMember || (actorMember.id !== u.member_id && actorMember.role !== 'adult')) {
       throw new DomainError('forbidden', '只有说这句话的人或家里的大人可以撤销')
@@ -1129,10 +1135,22 @@ export function createDomain(deps: DomainDeps): Domain {
     return r ? utteranceFromRow(r) : null
   }
 
-  function recentUtterances(limit: number): Utterance[] {
+  function recentUtterances(limit: number, scope: UtteranceScope = 'family'): Utterance[] {
     const n = Math.max(1, Math.min(500, Math.floor(limit) || 1))
+    let where: string
+    let args: string[]
+    if (scope === 'family') {
+      where = `visibility = 'family'`
+      args = []
+    } else if ('privateOf' in scope) {
+      where = `visibility = 'private' AND member_id = ?`
+      args = [scope.privateOf]
+    } else {
+      where = `(visibility = 'family' OR (visibility = 'private' AND member_id = ?))`
+      args = [scope.visibleTo]
+    }
     const rows = (
-      db.prepare('SELECT * FROM utterances ORDER BY created_at DESC, rowid DESC LIMIT ?').all(n) as UtteranceRow[]
+      db.prepare(`SELECT * FROM utterances WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(...args, n) as UtteranceRow[]
     ).reverse()
     const changes = changesForUtterances(
       db,
@@ -1141,6 +1159,7 @@ export function createDomain(deps: DomainDeps): Domain {
     return rows.map(r => toUtterance(r, changes.get(r.id) ?? []))
   }
 
+  /** Goes out on the bus to every stream; the SSE layer keeps a private utterance to its owner's streams (eventVisibleTo). */
   function broadcastUtterance(u: Utterance | null): void {
     if (u) safeEmit(() => bus.broadcast({ type: 'utterance', utterance: u }))
   }
@@ -1329,7 +1348,10 @@ export function createDomain(deps: DomainDeps): Domain {
         family: familyOrThrow(),
         members: listMemberRows(db).map(toMember),
         items,
-        utterances: recentUtterances(30),
+        // each chat keeps its own 30: a busy private chat must not push the family chat off the screen (or the reverse)
+        utterances: [...recentUtterances(30), ...recentUtterances(30, { privateOf: memberId })].sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt),
+        ),
         serverTime: now.toISOString(),
       }
     },
@@ -1571,13 +1593,21 @@ export function createDomain(deps: DomainDeps): Domain {
         if (!getMemberRow(db, memberId)) invalid(`找不到这个成员（${memberId}）`)
         if (!SOURCES.includes(source)) invalid(`未知来源：${String(source)}`)
         if (typeof text !== 'string') invalid('内容需要是文字')
+        const visibility = opts?.visibility ?? 'family'
+        if (!VISIBILITIES.includes(visibility)) invalid(`未知的对话范围：${String(visibility)}`)
         const replyTo = opts?.replyTo ?? null
-        if (replyTo && !getUtteranceRow(db, replyTo)) invalid(`找不到要回复的消息（${replyTo}）`)
+        if (replyTo) {
+          const asked = getUtteranceRow(db, replyTo)
+          // An answer stays in the chat that asked. Otherwise a family utterance could name someone's private one as
+          // its question and have the assistant read it back; to anyone but its owner a private utterance does not exist.
+          const sameChat = asked && asked.visibility === visibility && (asked.visibility === 'family' || asked.member_id === memberId)
+          if (!sameChat) invalid(`找不到要回复的消息（${replyTo}）`)
+        }
         const id = newId('u')
         db.prepare(
-          `INSERT INTO utterances (id, member_id, source, text, status, reply_to, audio_path, created_at)
-           VALUES (?, ?, ?, ?, 'processing', ?, ?, ?)`,
-        ).run(id, memberId, source, text.trim().slice(0, 5000), replyTo, opts?.audioPath ?? null, clock.now().toISOString())
+          `INSERT INTO utterances (id, member_id, source, visibility, text, status, reply_to, audio_path, created_at)
+           VALUES (?, ?, ?, ?, ?, 'processing', ?, ?, ?)`,
+        ).run(id, memberId, source, visibility, text.trim().slice(0, 5000), replyTo, opts?.audioPath ?? null, clock.now().toISOString())
         return getUtterance(id)!
       })()
       broadcastUtterance(u)

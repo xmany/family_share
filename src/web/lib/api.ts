@@ -30,7 +30,7 @@ import type {
   UtteranceResponse,
   WechatBindCodeResponse,
 } from '../../shared/api'
-import type { Member } from '../../shared/types'
+import type { Member, UtteranceVisibility } from '../../shared/types'
 import { fileNameForMime } from './recorder'
 
 export class ApiErrorX extends Error {
@@ -155,10 +155,11 @@ export const api = {
   // ---- utterances
   sendUtterance: (body: UtteranceBody) =>
     request<UtteranceResponse>('POST', '/api/utterances', { body, timeoutMs: UTTERANCE_TIMEOUT }),
-  sendVoice: (audio: Blob, mimeType: string, durationMs: number) => {
+  sendVoice: (audio: Blob, mimeType: string, durationMs: number, visibility: UtteranceVisibility = 'family') => {
     const form = new FormData()
     form.append('audio', audio, fileNameForMime(mimeType))
     form.append('durationMs', String(Math.round(durationMs)))
+    form.append('visibility', visibility)
     return request<UtteranceResponse>('POST', '/api/utterances/voice', { form, timeoutMs: UTTERANCE_TIMEOUT })
   },
   undo: (utteranceId: string) => request<UndoResponse>('POST', `/api/utterances/${enc(utteranceId)}/undo`),

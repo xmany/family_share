@@ -71,6 +71,7 @@ import {
   snoozeSchema,
   updateItemSchema,
   utteranceSchema,
+  visibilitySchema,
 } from './schemas'
 import { StreamRegistry, sseHeaders, sseResponse } from './sse'
 import { createStaticServer, defaultWebDir } from './static'
@@ -261,6 +262,7 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
       vapidPublicKey: ctx.notifier.vapidPublicKey(),
       sttEnabled: ctx.stt !== null,
       channels: ctx.notifier.channels(),
+      privateChat: true,
     }
     return c.json(res)
   })
@@ -351,6 +353,7 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
       memberId: me(c).id,
       text: b.text,
       source: b.source ?? (b.replyToUtteranceId ? 'clarification' : 'text'),
+      visibility: b.visibility ?? 'family',
       replyToUtteranceId: b.replyToUtteranceId ?? null,
     })
     return c.json(res)
@@ -375,6 +378,10 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
     if (durationMs !== null && Number.isFinite(durationMs) && durationMs > MAX_VOICE_MS) {
       throw new HttpError(400, 'invalid', '录音太长了（最多 90 秒）')
     }
+    // An unreadable value is refused, not defaulted: a recording meant for the private chat must never land in the family chat.
+    const visibilityRaw = form.get('visibility')
+    const visibility = visibilitySchema.safeParse(typeof visibilityRaw === 'string' && visibilityRaw.trim() ? visibilityRaw.trim() : undefined)
+    if (!visibility.success) throw new HttpError(400, 'invalid', '不认识这个对话范围（visibility 只能是 family 或 private）')
     const fileName = 'name' in audio && typeof audio.name === 'string' ? audio.name : null
     const ext = audioExtFor(audio.type, fileName)
     if (!ext) throw new HttpError(400, 'invalid', '不支持这种录音格式')
@@ -403,7 +410,13 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
       throw e
     }
     if (!transcriptText) throw new HttpError(422, 'stt_failed', '没听到说话的内容，请再说一次')
-    const res = await ctx.interpreter.interpret({ memberId: member.id, text: transcriptText, source: 'voice', audioPath })
+    const res = await ctx.interpreter.interpret({
+      memberId: member.id,
+      text: transcriptText,
+      source: 'voice',
+      visibility: visibility.data ?? 'family',
+      audioPath,
+    })
     return c.json({ ...res, transcript: transcriptText } satisfies UtteranceResponse)
   })
 
@@ -568,6 +581,7 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
       signal: c.req.raw.signal,
       registry: streams,
       pingMs: opts.pingIntervalMs,
+      memberId,
       isAuthorized: () => findSession(db, clock, raw)?.memberId === memberId,
     })
   })

@@ -1,9 +1,11 @@
-// 对话: the family's utterances (oldest → newest), the assistant's replies, what changed, undo,
-// clarification chips, and the input bar. Sending shows an optimistic 处理中… bubble.
+// 对话: utterances (oldest → newest), the assistant's replies, what changed, undo, clarification chips, and the
+// input bar. Sending shows an optimistic 处理中… bubble.
+// Two chats share the screen, switched in the header: 家里 (the family chat, everyone sees it) and 助手 (my private
+// chat with the assistant: only I see it, but what it changes still lands on the shared board).
 
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { UtteranceResponse } from '../../shared/api'
-import type { Member, Utterance } from '../../shared/types'
+import type { Member, Utterance, UtteranceVisibility } from '../../shared/types'
 import { formatInstantZh } from '../../shared/time'
 import { api, errorMessage, isApiError } from '../lib/api'
 import { mergeItems, upsertUtterance, useApp, useNow } from '../lib/store'
@@ -12,7 +14,7 @@ import { toast } from '../lib/toast'
 import type { RecordingResult } from '../lib/recorder'
 import { isStandalone } from '../lib/platform'
 import { Composer } from '../components/Composer'
-import { IconChevron, IconMic, IconUndo } from '../components/Icons'
+import { IconChevron, IconLock, IconMic, IconUndo } from '../components/Icons'
 import { Avatar, PageHeader } from '../components/ui'
 import { InstallGuide, IosInstallSteps, PushControl, usePushState } from '../components/setup'
 import { ScrollContext } from '../scroll'
@@ -23,7 +25,9 @@ interface Pending {
   text: string
   status: 'sending' | 'error'
   error?: string
-  /** utterance ids already on screen when this was sent (to spot the server's copy) */
+  /** the chat it was sent in */
+  visibility: UtteranceVisibility
+  /** utterance ids already on screen (in that chat) when this was sent (to spot the server's copy) */
   seen: Set<string>
   send: () => Promise<UtteranceResponse>
 }
@@ -38,7 +42,21 @@ function sendErrorMessage(e: unknown): string {
 }
 
 const EXAMPLES = ['明天早上你能带孩子出去吗？我九点有个会', '周六下午买菜，记得买牛奶', '以后想去海边露营']
+const PRIVATE_EXAMPLES = ['提醒我今晚八点给外婆打电话', '周六下午买菜，记得买牛奶', '我这周还有什么事？']
 const GAP_FOR_TIME_LABEL_MS = 15 * 60_000
+/** which chat was open last (this device) */
+const VIEW_KEY = 'fs_chat_view'
+/** createdAt of the newest family-chat line by someone else that I have looked at (this device) */
+const FAMILY_SEEN_KEY = 'fs_family_seen'
+
+/** The chat an utterance belongs to (anything not marked private is the family chat). */
+const chatOf = (u: Utterance): UtteranceVisibility => (u.visibility === 'private' ? 'private' : 'family')
+
+function latestFamilyByOthers(utterances: Utterance[], myId: string | undefined): string {
+  let latest = ''
+  for (const u of utterances) if (chatOf(u) === 'family' && u.memberId !== myId && u.createdAt > latest) latest = u.createdAt
+  return latest
+}
 
 export function ChatPage() {
   const app = useApp()
@@ -46,20 +64,49 @@ export function ChatPage() {
   const nowD = useNow()
   const scroller = useContext(ScrollContext)
   const [pending, setPending] = useState<Pending[]>([])
+  const [wantedView, setViewState] = useState<UtteranceVisibility>(() => (readStorage('local', VIEW_KEY) === 'private' ? 'private' : 'family'))
+  // Only a server that says it keeps private utterances private gets any (an older one would file them in the family chat).
+  const privateChat = app.me?.privateChat === true
+  const view: UtteranceVisibility = privateChat ? wantedView : 'family'
   const [draft, setDraft] = useState<string | null>(null)
   /** once the user starts talking, the setup card gets out of the way (it lives in 设置 too) */
   const [talked, setTalked] = useState(false)
   const stickToBottom = useRef(true)
 
   const members = useMemo(() => new Map((board?.members ?? []).map(m => [m.id, m])), [board?.members])
-  const utterances = useMemo(
+  const allUtterances = useMemo(
     () => [...(board?.utterances ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     [board?.utterances],
   )
+  /** the chat on screen */
+  const utterances = useMemo(() => allUtterances.filter(u => chatOf(u) === view), [allUtterances, view])
 
   const me = board?.me ?? null
   const tz = board?.family.timezone ?? 'UTC'
   const sttEnabled = app.me?.sttEnabled ?? false
+
+  const setView = (v: UtteranceVisibility) => {
+    writeStorage('local', VIEW_KEY, v)
+    stickToBottom.current = true
+    setViewState(v)
+  }
+
+  // ---- a dot on 家里 while I am in 助手 and someone said something there
+  const familyLatest = useMemo(() => latestFamilyByOthers(allUtterances, me?.id), [allUtterances, me?.id])
+  const [familySeen, setFamilySeen] = useState(() => {
+    const stored = readStorage('local', FAMILY_SEEN_KEY)
+    if (stored !== null) return stored
+    // first time on this device: what is already there is history, not news
+    const baseline = latestFamilyByOthers(board?.utterances ?? [], board?.me.id)
+    writeStorage('local', FAMILY_SEEN_KEY, baseline)
+    return baseline
+  })
+  useEffect(() => {
+    if (view !== 'family' || familyLatest <= familySeen) return
+    writeStorage('local', FAMILY_SEEN_KEY, familyLatest)
+    setFamilySeen(familyLatest)
+  }, [view, familyLatest, familySeen])
+  const familyUnread = view !== 'family' && familyLatest > familySeen
 
   // ---- sending
   const run = useCallback(async (key: string, send: () => Promise<UtteranceResponse>) => {
@@ -79,16 +126,19 @@ export function ChatPage() {
       const seen = new Set(utterances.map(u => u.id))
       stickToBottom.current = true
       setTalked(true)
-      setPending(list => [...list, { key, kind, text, status: 'sending', seen, send }])
+      setPending(list => [...list, { key, kind, text, status: 'sending', visibility: view, seen, send }])
       void run(key, send)
     },
-    [utterances, run],
+    [utterances, run, view],
   )
 
-  const sendText = (text: string) => submit('text', text, () => api.sendUtterance({ text, source: 'text' }))
-  const sendVoice = (r: RecordingResult) => submit('voice', '', () => api.sendVoice(r.blob, r.mimeType, r.durationMs))
+  // Everything is sent to the chat on screen; an answer stays in the chat of the question (the server insists on it).
+  const sendText = (text: string) => submit('text', text, () => api.sendUtterance({ text, source: 'text', visibility: view }))
+  const sendVoice = (r: RecordingResult) => submit('voice', '', () => api.sendVoice(r.blob, r.mimeType, r.durationMs, view))
   const answer = (u: Utterance, option: string) =>
-    submit('text', option, () => api.sendUtterance({ text: option, source: 'clarification', replyToUtteranceId: u.id }))
+    submit('text', option, () =>
+      api.sendUtterance({ text: option, source: 'clarification', visibility: chatOf(u), replyToUtteranceId: u.id }),
+    )
 
   const retry = (p: Pending) => {
     setPending(list => list.map(x => (x.key === p.key ? { ...x, status: 'sending', error: undefined } : x)))
@@ -97,7 +147,8 @@ export function ChatPage() {
   const dismiss = (p: Pending) => setPending(list => list.filter(x => x.key !== p.key))
 
   // Hide an optimistic bubble once the server's copy (e.g. the 'processing' utterance via SSE) is here.
-  const visiblePending = pending.filter(
+  const pendingHere = pending.filter(p => p.visibility === view)
+  const visiblePending = pendingHere.filter(
     p =>
       p.status === 'error' ||
       !utterances.some(
@@ -110,11 +161,11 @@ export function ChatPage() {
     return null
   }, [utterances, me?.id])
 
-  // ---- scrolling: start at the bottom, follow new messages while the user is near the bottom
+  // ---- scrolling: start at the bottom (also after switching chats), follow new messages while the user is near the bottom
   useLayoutEffect(() => {
     const el = scroller.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [scroller])
+  }, [scroller, view])
 
   useEffect(() => {
     const el = scroller.current
@@ -145,9 +196,9 @@ export function ChatPage() {
 
   return (
     <div className="page">
-      <PageHeader title="对话" />
+      <PageHeader title="对话" right={privateChat ? <ChatSwitch view={view} onChange={setView} familyUnread={familyUnread} /> : undefined} />
       <div className="flex flex-1 flex-col gap-1 px-3 pb-3">
-        {utterances.length === 0 && visiblePending.length === 0 && <EmptyChat onPick={setDraft} sttEnabled={sttEnabled} />}
+        {utterances.length === 0 && visiblePending.length === 0 && <EmptyChat view={view} onPick={setDraft} sttEnabled={sttEnabled} />}
         {utterances.map((u, i) => {
           const prev = utterances[i - 1]
           const showTime =
@@ -159,7 +210,7 @@ export function ChatPage() {
                 u={u}
                 mine={u.memberId === me.id}
                 speaker={members.get(u.memberId)}
-                canAnswer={u.id === lastMineId && pending.length === 0}
+                canAnswer={u.id === lastMineId && pendingHere.length === 0}
                 onAnswer={opt => answer(u, opt)}
               />
             </div>
@@ -177,7 +228,38 @@ export function ChatPage() {
         onSendVoice={sendVoice}
         draft={draft}
         onDraftConsumed={() => setDraft(null)}
+        note={
+          view === 'private' ? (
+            <>
+              <IconLock size={13} className="flex-none" />
+              只有你和助手看得到
+            </>
+          ) : undefined
+        }
       />
+    </div>
+  )
+}
+
+function ChatSwitch({
+  view,
+  onChange,
+  familyUnread,
+}: {
+  view: UtteranceVisibility
+  onChange: (v: UtteranceVisibility) => void
+  familyUnread: boolean
+}) {
+  return (
+    <div className="seg" role="tablist" aria-label="和谁说">
+      <button type="button" role="tab" className="seg-btn" aria-selected={view === 'family'} onClick={() => onChange('family')}>
+        家里
+        {familyUnread && <span className="seg-dot" role="img" aria-label="有新消息" />}
+      </button>
+      <button type="button" role="tab" className="seg-btn" aria-selected={view === 'private'} onClick={() => onChange('private')}>
+        <IconLock size={15} />
+        助手
+      </button>
     </div>
   )
 }
@@ -383,15 +465,21 @@ function PendingView({ p, onRetry, onDismiss }: { p: Pending; onRetry: () => voi
   )
 }
 
-function EmptyChat({ onPick, sttEnabled }: { onPick: (text: string) => void; sttEnabled: boolean }) {
+function EmptyChat({ view, onPick, sttEnabled }: { view: UtteranceVisibility; onPick: (text: string) => void; sttEnabled: boolean }) {
+  const isPrivate = view === 'private'
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 py-10 text-center">
-      <p className="text-[18px] font-semibold">说一句话，家里的事就安排好了</p>
+      <p className="text-[18px] font-semibold">{isPrivate ? '只跟助手说' : '说一句话，家里的事就安排好了'}</p>
+      {isPrivate && (
+        <p className="text-[15px] text-muted">
+          这里说的话和助手的回复，只有你自己看得到。事情照样记到大家的看板上，请家人帮忙时他们会收到通知。
+        </p>
+      )}
       <p className="text-[15px] text-muted">
         {sttEnabled ? '打字，或按住麦克风说话。' : '打字，或用键盘上的语音输入。'}比如：
       </p>
       <div className="flex flex-col items-center gap-2">
-        {EXAMPLES.map(ex => (
+        {(isPrivate ? PRIVATE_EXAMPLES : EXAMPLES).map(ex => (
           <button key={ex} type="button" className="chip" onClick={() => onPick(ex)}>
             {ex}
           </button>

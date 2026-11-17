@@ -1,10 +1,12 @@
 import type { UtteranceResponse } from '../../shared/api'
-import type { UtteranceSource } from '../../shared/types'
+import type { UtteranceSource, UtteranceVisibility } from '../../shared/types'
 
 export interface InterpretInput {
   memberId: string
   text: string
   source: UtteranceSource
+  /** Which chat it was said in (default 'family'). 'private' = only this member sees the utterance and the reply. */
+  visibility?: UtteranceVisibility
   /** When answering a clarification question: the utterance that asked it */
   replyToUtteranceId?: string | null
   audioPath?: string | null

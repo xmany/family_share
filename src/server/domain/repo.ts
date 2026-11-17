@@ -83,6 +83,7 @@ export interface UtteranceRow {
   id: string
   member_id: string
   source: string
+  visibility: string
   text: string
   reply: string | null
   status: string
@@ -203,6 +204,7 @@ export function toUtterance(r: UtteranceRow, changes: Change[]): Utterance {
     id: r.id,
     memberId: r.member_id,
     source: r.source as UtteranceSource,
+    visibility: r.visibility === 'private' ? 'private' : 'family',
     text: r.text,
     reply: r.reply,
     status: r.status as UtteranceStatus,

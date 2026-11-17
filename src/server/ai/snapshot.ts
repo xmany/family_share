@@ -2,7 +2,7 @@
 // precomputed calendar (weekdays, relative labels, lunar dates) and the utterance itself.
 // Nothing here may leak into SYSTEM_PROMPT (see prompt.ts).
 
-import type { Item, Member, Utterance, UtteranceSource } from '../../shared/types'
+import type { Item, Member, Utterance, UtteranceSource, UtteranceVisibility } from '../../shared/types'
 import type { Domain } from '../domain/types'
 import { clip, dueLabel, nameLookup } from '../domain/describe'
 import {
@@ -31,6 +31,12 @@ export const CLOSED_CAP = 60
 export { type ReplyScript, replyScriptFor } from './script'
 
 const SCRIPT_LABEL: Record<ReplyScript, string> = { simplified: '简体中文', traditional: '繁體中文' }
+
+/** The snapshot's channel line (explained to the model in SYSTEM_PROMPT, "How a turn works"). */
+const CHANNEL_LABEL: Record<UtteranceVisibility, string> = {
+  family: 'family（全家人都能看到这句话和你的回复）',
+  private: 'private（只有说话人和你能看到这句话和你的回复）',
+}
 
 // ---------------------------------------------------------------------------------------------
 // lunar calendar (Intl 'zh-CN-u-ca-chinese'; never let the model convert lunar dates itself)
@@ -172,17 +178,30 @@ export interface SnapshotData {
   /** itemId → extra pings still ahead (set_reminder rows, soonest first), so 取消提醒 can find them */
   reminders?: Map<string, Array<{ fireAt: string; memberId: string }>>
   closedRecently: Item[]
-  /** Oldest first, without the utterance being interpreted */
+  /**
+   * Oldest first, without the utterance being interpreted. Only what everyone who will read the reply may see:
+   * the family chat, plus (for a private utterance) the speaker's own private chat.
+   */
   recentUtterances: Utterance[]
   /** The utterance this one answers, when it is a clarification answer */
   answering: Utterance | null
-  utterance: { text: string; source: UtteranceSource }
+  /** visibility: which chat it was said in (default 'family') */
+  utterance: { text: string; source: UtteranceSource; visibility?: UtteranceVisibility }
 }
 
 /** Gathers everything the snapshot needs from the domain. `currentUtteranceId` is excluded from the recent chat. */
 export function gatherSnapshot(
   domain: Domain,
-  args: { now: Date; speaker: Member; text: string; source: UtteranceSource; currentUtteranceId: string; replyToUtteranceId?: string | null },
+  args: {
+    now: Date
+    speaker: Member
+    text: string
+    source: UtteranceSource
+    /** Which chat the utterance was said in (default 'family') */
+    visibility?: UtteranceVisibility
+    currentUtteranceId: string
+    replyToUtteranceId?: string | null
+  },
 ): SnapshotData {
   const tz = domain.getFamily().timezone
   const all = domain.listActiveItems()
@@ -198,8 +217,15 @@ export function gatherSnapshot(
     const pings = extraPings(domain, it.id, args.now)
     if (pings.length) reminders.set(it.id, pings.map(n => ({ fireAt: n.fireAt, memberId: n.memberId })))
   }
-  const recent = domain.recentUtterances(RECENT_UTTERANCES + 1).filter(u => u.id !== args.currentUtteranceId)
-  const answering = args.replyToUtteranceId ? domain.getUtterance(args.replyToUtteranceId) : null
+  const visibility = args.visibility ?? 'family'
+  // The reply to a family utterance is read by everyone, so its context is the family chat only: nothing said in
+  // private (not even by the speaker) can surface there. A private utterance also sees the speaker's own private chat.
+  const scope = visibility === 'private' ? { visibleTo: args.speaker.id } : ('family' as const)
+  const recent = domain.recentUtterances(RECENT_UTTERANCES + 1, scope).filter(u => u.id !== args.currentUtteranceId)
+  const asked = args.replyToUtteranceId ? domain.getUtterance(args.replyToUtteranceId) : null
+  // same rule as createUtterance: never quote a private utterance outside the private chat of the member who said it
+  const answering =
+    asked && asked.visibility === visibility && (asked.visibility === 'family' || asked.memberId === args.speaker.id) ? asked : null
   return {
     now: args.now,
     tz,
@@ -212,7 +238,7 @@ export function gatherSnapshot(
     closedRecently: domain.listClosedSince(new Date(args.now.getTime() - 7 * DAY)).slice(0, CLOSED_CAP),
     recentUtterances: recent.slice(-RECENT_UTTERANCES),
     answering,
-    utterance: { text: args.text, source: args.source },
+    utterance: { text: args.text, source: args.source, visibility },
   }
 }
 
@@ -249,7 +275,8 @@ function renderItem(it: Item, d: SnapshotData, nameOf: (id: string | null) => st
 }
 
 function renderUtterance(u: Utterance, d: SnapshotData, nameOf: (id: string | null) => string): string {
-  const head = `- ${formatInstantZh(u.createdAt, d.now, d.tz)} ${nameOf(u.memberId)}：${clip(sanitize(u.text), 100)}`
+  const where = u.visibility === 'private' ? '（私聊）' : ''
+  const head = `- ${formatInstantZh(u.createdAt, d.now, d.tz)} ${nameOf(u.memberId)}${where}：${clip(sanitize(u.text), 100)}`
   if (u.status === 'clarify' && u.clarification) {
     const opts = u.clarification.options.map(o => sanitize(o)).join(' / ')
     return `${head} → 助手问：${clip(sanitize(u.clarification.question), 80)}${opts ? `（选项：${opts}）` : ''}`
@@ -298,6 +325,7 @@ export function renderTurnInput(d: SnapshotData): string {
   return `<board_snapshot>
 now: ${describeNowForPrompt(d.now, d.tz)}
 speaker: ${d.speaker.id} ${sanitize(d.speaker.name)}（回复用${SCRIPT_LABEL[replyScriptFor(d.speaker)]}）
+channel: ${CHANNEL_LABEL[d.utterance.visibility ?? 'family']}
 calendar:
 ${renderCalendar(d.now, d.tz)}
 lunar_months: ${lunarMonths || '(无)'}

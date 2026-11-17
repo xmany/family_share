@@ -13,11 +13,29 @@ export function openDb(path: string): Db {
   db.pragma('foreign_keys = ON')
   db.pragma('busy_timeout = 5000')
   db.exec(SCHEMA_SQL)
+  migrate(db)
   // Family data: readable by the server's user only (db + WAL/SHM files).
   if (path !== ':memory:') {
     for (const f of [path, `${path}-wal`, `${path}-shm`]) if (existsSync(f)) chmodSync(f, 0o600)
   }
   return db
+}
+
+function hasColumn(db: Db, table: string, column: string): boolean {
+  return (db.pragma(`table_info(${table})`) as { name: string }[]).some(c => c.name === column)
+}
+
+/** Brings a database created by an older version up to SCHEMA_SQL. Every step is safe to run again. */
+function migrate(db: Db): void {
+  // private chat with the assistant: existing utterances were all said in the family chat
+  if (!hasColumn(db, 'utterances', 'visibility')) {
+    try {
+      db.exec(`ALTER TABLE utterances ADD COLUMN visibility TEXT NOT NULL DEFAULT 'family' CHECK (visibility IN ('family', 'private'))`)
+    } catch (e) {
+      // the server and `npm run family` can open an old database at the same moment: the other one added it first
+      if (!hasColumn(db, 'utterances', 'visibility')) throw e
+    }
+  }
 }
 
 /** Parses a JSON column, falling back when null/invalid. */

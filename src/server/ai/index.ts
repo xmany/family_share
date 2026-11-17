@@ -111,14 +111,16 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
   const api: MessagesApi | null = deps.api ?? (config.anthropic.apiKey ? messagesApiFrom(createAnthropicClient(config)) : null)
   const cfg = loopConfigFrom(config)
 
-  function startUtterance(input: InterpretInput): Utterance {
-    const opts = { replyTo: input.replyToUtteranceId ?? null, audioPath: input.audioPath ?? null }
+  /** Records the utterance. `replyTo` is the question it really answers: null when the domain refused the link. */
+  function startUtterance(input: InterpretInput): { utterance: Utterance; replyTo: string | null } {
+    const opts = { replyTo: input.replyToUtteranceId ?? null, audioPath: input.audioPath ?? null, visibility: input.visibility ?? 'family' }
     try {
-      return domain.createUtterance(input.memberId, input.source, input.text, opts)
+      return { utterance: domain.createUtterance(input.memberId, input.source, input.text, opts), replyTo: opts.replyTo }
     } catch (e) {
-      // An unknown replyTo must not lose what the member said: record it without the link.
+      // A replyTo that is unknown, or in a chat this utterance is not part of (someone's private chat), must not lose
+      // what the member said: record it without the link. The snapshot must then not quote that utterance either.
       if (e instanceof DomainError && opts.replyTo && domain.getMember(input.memberId)) {
-        return domain.createUtterance(input.memberId, input.source, input.text, { ...opts, replyTo: null })
+        return { utterance: domain.createUtterance(input.memberId, input.source, input.text, { ...opts, replyTo: null }), replyTo: null }
       }
       throw e
     }
@@ -133,7 +135,7 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
   }
 
   async function interpret(input: InterpretInput): Promise<UtteranceResponse> {
-    const utterance = startUtterance(input)
+    const { utterance, replyTo } = startUtterance(input)
     const id = utterance.id
 
     if (!api) {
@@ -168,8 +170,9 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
           speaker,
           text: utterance.text,
           source: input.source,
+          visibility: utterance.visibility,
           currentUtteranceId: id,
-          replyToUtteranceId: input.replyToUtteranceId ?? null,
+          replyToUtteranceId: replyTo,
         }),
       )
       result = await runLoop({

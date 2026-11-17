@@ -79,12 +79,19 @@ export const snoozeSchema = z
 
 export const noteSchema = z.object({ text: str(4000) })
 
+/** Which chat an utterance goes to. Absent = the family chat (older cached copies of the web app never send it). */
+export const visibilitySchema = z
+  .enum(['family', 'private'])
+  .nullish()
+  .transform(v => v ?? undefined)
+
 export const utteranceSchema = z.object({
   text: z.string().trim().min(1).max(2000),
   source: z
     .enum(['text', 'clarification'])
     .nullish()
     .transform(v => v ?? undefined),
+  visibility: visibilitySchema,
   replyToUtteranceId: optStr(100),
 })
 

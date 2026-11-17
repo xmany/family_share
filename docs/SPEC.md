@@ -134,6 +134,13 @@ See `docs/research/claude-api-brief.md` for the API brief (model, effort, fallba
   `另有提醒 明天 07:00（2026-10-22 07:00）→ 老公`, up to 3 —, last activity, latest 2 notes truncated), titles of items closed
   in the last 7 days (with ids), the last 8 utterances family-wide (speaker, text, reply), and — if this utterance answers a
   clarification — that question and options.
+- **Two chats** (`Utterance.visibility`): `family` (default; every member reads the utterance and the reply) and `private`
+  (a member's own chat with the assistant; only that member reads them). The board is shared either way: tools behave the
+  same in both, items are never private, requests and reminders notify as usual. The context block carries a `channel:`
+  line. A family turn's recent utterances are the family chat only — nothing said in private, not even by the speaker, may
+  surface in a reply everyone reads; a private turn also gets the speaker's own private lines (marked `（私聊）`).
+  An answer to a clarification must be in the chat that asked (a private question only by its owner, in private);
+  otherwise the utterance is recorded without the link and the question is not quoted to the model.
 - Tools (strict JSON schemas, `additionalProperties: false`, no nullable fields, ≤ 24 optional params total): `search_items`,
   `create_item`, `update_item`, `add_note`, `send_request`, `respond_to_request`, `complete_item` (resolution done|dropped),
   `snooze_item` (preset tonight|tomorrow|weekend|next_week|custom; silences the item until then and pings once — if the
@@ -186,7 +193,14 @@ See `docs/research/claude-api-brief.md` for the API brief (model, effort, fallba
   `stt_unavailable`.
 - `POST /api/notifications/:id/action` is called by the service worker from a notification button; it must only act on a
   notification that belongs to the session's member.
-- SSE `GET /api/stream`: send `hello`, then every Bus `server_event`, plus `ping` every 25 s.
+- SSE `GET /api/stream`: send `hello`, then every Bus `server_event`, plus `ping` every 25 s. An `utterance` event for a
+  private utterance goes only to the streams of the member who said it (`eventVisibleTo`).
+- Private chat: `POST /api/utterances` takes `visibility: 'family' | 'private'` (voice: a form field of the same name;
+  absent = family, an unknown value = 400). `GET /api/board` returns the 30 most recent family utterances plus the 30
+  most recent of the caller's own private ones — never anyone else's. Undoing a private utterance is for its owner only;
+  to everyone else (adults included) its id answers 404 like an unknown one. `GET /api/me` says `privateChat: true`; the
+  web app offers the private chat only then, so a new web build served by a not-yet-restarted old server (which would
+  ignore `visibility` and file the utterance in the family chat) cannot send one. WeChat inbound texts stay `family`.
 - In production the same server serves `dist/web` (SPA fallback to index.html for non-/api paths) with correct caching
   (index.html and sw.js `no-cache`; hashed assets immutable).
 - `GET /healthz` → `{ ok: true }` (no auth).
@@ -202,7 +216,10 @@ Screens (**path routes** — hash routes break iOS push deep links): `/` 对话 
 `/weekly` 本周, `/settings` 设置, `/join` 加入, `/t/:token` (signed link view, works without a session — used from WeChat). Bottom tab bar: 对话 · 看板 · 设置. Mobile-first (360–430 px wide), safe-area insets, large touch targets,
 system Chinese font stack, light + dark mode.
 
-- **对话**: chronological utterances (mine right, others' left with avatar), each with the assistant reply and a compact
+- **对话**: a switch in the header picks the chat on screen — 家里 (`family`) or 助手 (`private`, lock icon; shown only when
+  `/api/me` has `privateChat`). The choice is remembered per device; everything sent goes to the chat on screen, and the
+  助手 view says 只有你和助手看得到 above the input. 家里 gets a dot when someone else spoke there while 助手 was open.
+  Each view: chronological utterances (mine right, others' left with avatar), each with the assistant reply and a compact
   "改动" card listing `changes[].summary` lines, each tappable to the item, plus 撤销 (undo) on my own utterances.
   Clarifications render option chips; tapping sends `{ source: 'clarification', replyToUtteranceId }`.
   Input bar: text field (keyboard dictation works) + send + a big hold-to-talk mic button (press and hold to record,

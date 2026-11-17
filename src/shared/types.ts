@@ -138,6 +138,13 @@ export interface ItemEvent {
 
 export type UtteranceSource = 'text' | 'voice' | 'clarification' | 'wechat' | 'whatsapp'
 export type UtteranceStatus = 'processing' | 'done' | 'clarify' | 'error' | 'undone'
+/**
+ * Who can read an utterance and the assistant's reply to it.
+ * family  — the family chat: every member
+ * private — the member's own chat with the assistant: only the member who said it
+ * Either way the changes it causes land on the shared board (items, requests and reminders are never private).
+ */
+export type UtteranceVisibility = 'family' | 'private'
 
 export interface Clarification {
   question: string
@@ -158,6 +165,7 @@ export interface Utterance {
   id: string
   memberId: string
   source: UtteranceSource
+  visibility: UtteranceVisibility
   /** What the member said (typed text or the voice transcript) */
   text: string
   /** The assistant's short reply */
