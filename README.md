@@ -327,6 +327,7 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 | 提醒标题带「（迟到）」或者没收到 | 服务器（或 Mac）当时在睡眠或关机。用一直开机的机器 |
 | 回复「AI 还没配置」 | `.env` 里没有 `ANTHROPIC_API_KEY`，填好后重启 |
 | 回复「AI 服务的配置有问题」 | key 或模型名不对，看服务器日志里的 `[ai] utterance … failed: auth / model_not_found` |
+| 回复「AI 的使用额度用完了」 | Anthropic 账户达到了自己设的每月消费上限，或者预付余额用完了（日志里是 `failed: spend_limit`）。到 console.anthropic.com → Settings → Limits 提高上限或充值，或者等回复里写的恢复时间。同一个账户下别的项目也会占用这个额度，可以给本 App 单独建一个 workspace 和 key |
 | 回复「AI 现在有点忙」 | Anthropic 限流或过载，稍后再说一次；已经做好的改动会保留 |
 | 没有麦克风按钮 | 没配置语音识别（启动摘要里 `speech: off`），或者用 Qwen / Whisper 但找不到 ffmpeg（设置 `FFMPEG_PATH`，比如 `/opt/homebrew/bin/ffmpeg`），或者 `WHISPER_PYTHON` 不能 `import whisper`（启动时会打印原因）。键盘自带的语音输入照样能用 |
 | 语音提示「没听清」 | 看服务器日志里的 `[stt]` 行；运行 `npm run family -- stt-test` 单独测一下语音识别 |
