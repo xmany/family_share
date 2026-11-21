@@ -10,18 +10,18 @@ import type { Change, Clarification, Item, Member, Utterance, UtteranceStatus } 
 import type { Config } from '../config'
 import type { Domain } from '../domain/types'
 import { DomainError } from '../domain/types'
-import type { Clock } from '../time'
+import { type Clock, formatInstantZh } from '../time'
 import type { InterpretInput, Interpreter } from './types'
 import { createAnthropicClient, messagesApiFrom } from './client'
 import { executeCall, type ExecContext } from './executor'
-import { type CallUsage, type LoopErrorCode, type LoopResult, type MessagesApi, loopConfigFrom, runLoop } from './loop'
+import { type CallUsage, type LoopErrorCode, type LoopResult, type MessagesApi, loopConfigFrom, runLoop, spendLimitResetAt } from './loop'
 import { toSpeakerScript } from './script'
 import { gatherSnapshot, renderTurnInput } from './snapshot'
 
 export type { MessagesApi } from './loop'
 export type { InterpretInput, Interpreter } from './types'
 export { createAnthropicClient, messagesApiFrom } from './client'
-export { buildRequest, classifyApiError, loopConfigFrom, runLoop, usageOf } from './loop'
+export { buildRequest, classifyApiError, loopConfigFrom, runLoop, spendLimitResetAt, usageOf } from './loop'
 export type { CallUsage, LoopConfig, LoopResult, ToolCallRecord } from './loop'
 export { SYSTEM_PROMPT, TIME_OF_DAY_DEFAULTS } from './prompt'
 export { gatherSnapshot, lunarLabel, renderCalendar, renderTurnInput } from './snapshot'
@@ -54,13 +54,17 @@ export const REPLIES = {
   failure: '抱歉，刚才没处理成功，请再说一次。',
   busy: 'AI 现在有点忙，请过一会儿再说一次。',
   misconfigured: 'AI 服务的配置有问题（请检查服务器设置）。可以先用看板上的按钮。',
+  spendLimit: 'AI 的使用额度用完了（要在 Anthropic 后台提高上限或充值）。可以先用看板上的按钮。',
+  /** {when} is the reset time in the family's timezone, e.g. 「12/1 周二 13:00」 */
+  spendLimitUntil: 'AI 的使用额度用完了，{when} 自动恢复。可以先用看板上的按钮。',
   tooComplex: '这句有点复杂，我只做了一部分，请把剩下的分开再说一下。',
   cancelled: '这句话已经撤销了。',
   partialKept: '已经做好的改动保留了，可以在下面查看或撤销。',
   nothing: '收到。',
 } as const
 
-function errorReply(code: LoopErrorCode, changes: Change[]): string {
+/** `when` formats the reset time a spend-limit error names, for the speaker (family timezone). */
+function errorReply(code: LoopErrorCode, changes: Change[], when: (at: Date) => string, detail?: string): string {
   let base: string
   switch (code) {
     case 'cancelled':
@@ -84,6 +88,11 @@ function errorReply(code: LoopErrorCode, changes: Change[]): string {
     case 'billing':
       base = REPLIES.misconfigured
       break
+    case 'spend_limit': {
+      const at = spendLimitResetAt(detail)
+      base = at ? REPLIES.spendLimitUntil.replace('{when}', when(at)) : REPLIES.spendLimit
+      break
+    }
     default:
       base = REPLIES.failure
   }
@@ -213,7 +222,7 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
         break
       case 'error':
         status = 'error'
-        reply = conv(errorReply(result.code, changes))
+        reply = conv(errorReply(result.code, changes, at => formatInstantZh(at, clock.now(), domain.getFamily().timezone), result.detail))
         error = reply
         if (result.code !== 'cancelled') console.warn(`[ai] utterance ${id} failed: ${result.code}${result.detail ? ` — ${result.detail}` : ''}`)
         break

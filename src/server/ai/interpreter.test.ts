@@ -252,6 +252,18 @@ describe('interpret: failures never throw', () => {
     expect((await auth.interpreter.interpret({ memberId: auth.t.wife.id, text: 'x', source: 'text' })).utterance.error).toBe(REPLIES.misconfigured)
   })
 
+  it('a used-up spend limit says so, with the reset time in the family timezone', async () => {
+    const h = new Headers()
+    const limit = 'You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC.'
+    const s = setup([Anthropic.APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: limit } }, limit, h)])
+    const r = await s.interpreter.interpret({ memberId: s.t.wife.id, text: 'x', source: 'text' })
+    // 00:00 UTC is 11:00 in Sydney (AEDT)
+    expect(r.utterance.error).toBe('AI 的使用额度用完了，12/1 周二 11:00 自动恢复。可以先用看板上的按钮。')
+    const credit = 'Your credit balance is too low to access the Anthropic API.'
+    const c = setup([Anthropic.APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: credit } }, credit, h)])
+    expect((await c.interpreter.interpret({ memberId: c.t.wife.id, text: 'x', source: 'text' })).utterance.error).toBe(REPLIES.spendLimit)
+  })
+
   it('stops at config.anthropic.maxIterations', async () => {
     let n = 0
     const loop = () => msg('tool_use', [toolUse(`t${n++}`, 'search_items', { query: '牛奶', include_closed: true })])

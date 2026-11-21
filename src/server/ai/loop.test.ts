@@ -2,7 +2,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { describe, expect, it } from 'vitest'
 import { messagesApiFrom } from './client'
-import { classifyApiError, type LoopConfig, runLoop, type ToolOutcomeLike } from './loop'
+import { classifyApiError, type LoopConfig, runLoop, spendLimitResetAt, type ToolOutcomeLike } from './loop'
 import { SYSTEM_PROMPT } from './prompt'
 import { msg, ScriptedApi, text, thinking, toolUse } from './testing'
 import type { BoardCall } from './tools'
@@ -216,7 +216,18 @@ describe('runLoop', () => {
     expect(classifyApiError(Anthropic.APIError.generate(529, { type: 'error', error: { type: 'overloaded_error', message: 'x' } }, 'x', h)).code).toBe('overloaded')
     expect(classifyApiError(Anthropic.APIError.generate(500, { type: 'error', error: { type: 'api_error', message: 'x' } }, 'x', h)).code).toBe('server_error')
     expect(classifyApiError(Anthropic.APIError.generate(402, { type: 'error', error: { type: 'billing_error', message: 'x' } }, 'x', h)).code).toBe('billing')
+    const limit = 'You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC.'
+    expect(classifyApiError(Anthropic.APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: limit } }, limit, h)).code).toBe('spend_limit')
+    const credit = 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'
+    expect(classifyApiError(Anthropic.APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: credit } }, credit, h)).code).toBe('spend_limit')
     expect(classifyApiError(new TypeError('boom')).code).toBe('internal')
+  })
+
+  it('reads when a spend limit resets', () => {
+    expect(spendLimitResetAt('BadRequestError: 400 {…"You will regain access on 2026-12-01 at 00:00 UTC."}')?.toISOString()).toBe('2026-12-01T00:00:00.000Z')
+    expect(spendLimitResetAt('regain access on 2027-01-01.')?.toISOString()).toBe('2027-01-01T00:00:00.000Z')
+    expect(spendLimitResetAt('Your credit balance is too low')).toBeNull()
+    expect(spendLimitResetAt(undefined)).toBeNull()
   })
 
   it('sends the Opus 5.5-safe request shape', async () => {

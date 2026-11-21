@@ -112,6 +112,7 @@ export type LoopErrorCode =
   | 'permission'
   | 'model_not_found'
   | 'billing'
+  | 'spend_limit'
   | 'api_error'
   | 'internal'
 
@@ -279,6 +280,17 @@ async function runTool(tu: BetaToolUseBlock, a: LoopArgs, log: ToolCallRecord[])
   return { type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify({ ok: true, ...out.result }) }
 }
 
+/** "You have reached your specified API usage limits…" / "Your credit balance is too low to access the Anthropic API…" */
+const SPEND_LIMIT_RE = /usage limits?\b|credit balance is too low/i
+
+/** When a spend-limit error says access comes back ("…regain access on 2026-12-01 at 00:00 UTC."), or null. */
+export function spendLimitResetAt(detail: string | undefined): Date | null {
+  const m = /regain access on (\d{4}-\d{2}-\d{2})(?: at (\d{2}:\d{2}) UTC)?/.exec(detail ?? '')
+  if (!m) return null
+  const at = new Date(`${m[1]}T${m[2] ?? '00:00'}:00Z`)
+  return Number.isNaN(at.getTime()) ? null : at
+}
+
 /** Most specific first: in the TS SDK every one of these extends Anthropic.APIError. */
 export function classifyApiError(err: unknown): { code: LoopErrorCode; detail: string } {
   const id = err instanceof Anthropic.APIError && err.requestID ? ` (${err.requestID})` : ''
@@ -286,6 +298,9 @@ export function classifyApiError(err: unknown): { code: LoopErrorCode; detail: s
   if (err instanceof Anthropic.APIUserAbortError) return { code: 'aborted', detail: d(err) }
   if (err instanceof Anthropic.APIConnectionTimeoutError) return { code: 'timeout', detail: d(err) }
   if (err instanceof Anthropic.APIConnectionError) return { code: 'network', detail: d(err) }
+  // The account's monthly spend limit is reached or its prepaid credit ran out. The API sends a 400
+  // invalid_request_error for both, so match the message before treating it as a bug in our request.
+  if (err instanceof Anthropic.APIError && SPEND_LIMIT_RE.test(err.message)) return { code: 'spend_limit', detail: d(err) }
   if (err instanceof Anthropic.BadRequestError) return { code: 'bad_request', detail: d(err) } // our bug: request shape
   if (err instanceof Anthropic.AuthenticationError) return { code: 'auth', detail: d(err) } // bad/missing key
   if (err instanceof Anthropic.PermissionDeniedError) return { code: 'permission', detail: d(err) }
