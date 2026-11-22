@@ -42,6 +42,30 @@ Use `FixedClock` in tests; never call `new Date()`/`Date.now()` for business log
 - **Every notification goes through the outbox** (`notifications` table), written in the same transaction as the
   change that caused it. The scheduler delivers it. Nothing is "remembered" by the LLM.
 
+## 1a. Repeating items
+
+- `Item.repeat` (`RepeatRule`, `src/shared/repeat.ts`; column `items.repeat`, JSON) makes a task, reminder or request
+  repeat: daily / weekly on chosen weekdays / monthly on a day (a short month uses its last day) / yearly, every
+  `interval`. It needs a due (`dueAt` or `dueDate` = the current occurrence) and is never on an idea; clearing the due
+  or turning it into an idea stops repeating. `anchor` is the local date of the occurrence the item stands for and where
+  interval counting starts; it stays put when a single occurrence is moved, so the next one follows the series.
+- **One item that moves on** (`src/server/domain/occurrences.ts`): `completeItem` (and `updateItem` status `done`,
+  notification / signed-link 完成) on an active repeating item does not close it: its due moves to the next occurrence
+  after max(anchor, current due) that is not already over, at the same wall-clock time (DST-safe). One event
+  `item_completed` (`skipOccurrence`: `item_updated`) with before/after of status, due, rule and snooze, so undo puts
+  the occurrence back. The next occurrence starts fresh: in_progress / blocked → open (accepted for requests), a running
+  snooze ends, extra `explicit:` pings before the next occurrence's day are cancelled (recorded for undo), timing rows
+  re-planned. Completing an occurrence of a request tells the requester (`request_answered:<id>:done:<n>:<date>`).
+  `dropped` closes the item and ends the series.
+- A new repeating item whose first occurrence is already over starts on the next one.
+- **Rollover** (`Domain.rollOverRepeats`, every scheduler tick before the generators, system actor): an occurrence
+  nobody completed moves on — a reminder 2 h after its time (date only: when its day is over), a task / request only
+  from the start of the day before the next occurrence (it stays overdue until then). Skipped while snoozed and for
+  declined requests. Event `item_updated` (`payload.occurrence: 'missed'`).
+- 完成 taps from a notification or signed link that was sent before the item last moved on are no-ops (they were about
+  an occurrence already dealt with), so a retried tap never completes two occurrences.
+- Repeating items are never "stuck" in the weekly review.
+
 ## 2. Status rules (domain enforces)
 
 | Kind | Allowed statuses | Notes |
@@ -161,7 +185,11 @@ See `docs/research/claude-api-brief.md` for the API brief (model, effort, fallba
   time-of-day defaults line: 早上 08:00，上午 10:00，中午 12:00，下午 15:00，傍晚 18:00，晚上 20:00，睡前 21:30，下班后 18:30.
 - Script: titles/notes are stored as spoken; duplicate checks and search compare Simplified-normalized text (opencc-js t2s).
   The reply uses the speaker's script (member.language zh-CN → Simplified).
-- Repeating tasks (每周二倒垃圾) are not supported in v0: create the next occurrence only and say so in the reply.
+- Repeating items (每周二倒垃圾, §1a): `create_item` / `send_request` / `update_item` take an optional `repeat` string, an
+  RFC 5545 RRULE subset (`FREQ=DAILY|WEEKLY|MONTHLY|YEARLY`, `INTERVAL`, `BYDAY` for weekly, `BYMONTHDAY`, `BYMONTH`;
+  `NONE` on update_item stops repeating; anything else — COUNT, UNTIL, `1SA` — is an is_error result). `complete_item`
+  resolution `skipped` skips one occurrence. Active items show `重复 每周日（截止是这一次）`. Patterns the subset cannot
+  express (每月第一个周六, lunar) still get only the next occurrence and the reply says so.
 - Loop cap: `config.anthropic.maxIterations` (default 6) model calls per utterance; on cap or API failure, finish with status `error` and a short Chinese message;
   changes already applied stay (and remain undoable).
 - Behaviour rules for the system prompt: resolve references to existing items before creating ("那个柜子" = the open

@@ -8,6 +8,8 @@
 
 import type { Item, Member, ScheduledNotification } from '../../shared/types'
 import { CLOSED_STATUSES } from '../../shared/types'
+import type { RepeatInput } from '../../shared/repeat'
+import { RepeatError, buildRepeatRule, describeRepeat, repeatInputOf } from '../../shared/repeat'
 import { dueLabel, nameLookup, statusLabel } from '../domain/describe'
 import { normalizeForSearch } from '../domain/normalize'
 import type { Actor, Domain, UpdateItemInput } from '../domain/types'
@@ -99,6 +101,8 @@ export interface ItemView {
   owner: string
   requested_by?: string
   due: string | null
+  /** how a repeating item repeats, e.g. "每周日"; `due` is then its current occurrence */
+  repeat?: string
   snoozed_until?: string
   closed?: boolean
 }
@@ -117,6 +121,7 @@ export function itemView(item: Item, ctx: ExecContext): ItemView {
     due: dueLabel(item, now, ctx.tz),
   }
   if (item.requestedBy) v.requested_by = nameOf(item.requestedBy)
+  if (item.repeat) v.repeat = describeRepeat(item.repeat)
   if (item.snoozedUntil && new Date(item.snoozedUntil).getTime() > now.getTime()) v.snoozed_until = formatInstantZh(item.snoozedUntil, now, ctx.tz)
   if (isClosed(item)) v.closed = true
   return v
@@ -265,6 +270,8 @@ function createItem(call: CallOf<'create_item'>, ctx: ExecContext) {
       )
     }
   }
+  if (inp.repeat && inp.kind === 'idea') throw new ToolError('invalid', '想法不能重复；要定期做的事请用 kind "task"（或 "reminder"），并给 due_date。')
+  if (inp.repeat && !due.dueAt && !due.dueDate) throw new ToolError('invalid', 'repeat 需要 due_date：第一次是哪天（还没过的那一次）。')
   const item = ctx.domain.createItem(actorOf(ctx), {
     kind: inp.kind,
     title: inp.title,
@@ -273,9 +280,10 @@ function createItem(call: CallOf<'create_item'>, ctx: ExecContext) {
     dueAt: due.dueAt,
     dueDate: due.dueDate,
     priority: inp.priority,
+    ...(inp.repeat ? { repeat: inp.repeat } : {}),
   })
   touch(ctx, item)
-  return { item: itemView(item, ctx), ...warnings(pastWarning(ctx, item)) }
+  return { item: itemView(item, ctx), ...firstMoved(ctx, item, due), ...warnings(pastWarning(ctx, item)) }
 }
 
 function updateItem(call: CallOf<'update_item'>, ctx: ExecContext) {
@@ -326,6 +334,16 @@ function updateItem(call: CallOf<'update_item'>, ctx: ExecContext) {
       break
     }
   }
+  if (inp.repeat !== undefined) {
+    if (inp.repeat === null) {
+      if (item.repeat) changes.repeat = null
+    } else {
+      const dueAfter = 'dueAt' in changes || 'dueDate' in changes ? { dueAt: changes.dueAt ?? null, dueDate: changes.dueDate ?? null } : item
+      const date = dueAfter.dueAt ? localDate(new Date(dueAfter.dueAt), ctx.tz) : (dueAfter.dueDate ?? null)
+      if (!date) throw new ToolError('invalid', '这个事项没有日期，不能重复：请同时用 due_change "set" 给出下一次的日期。')
+      if (!sameRuleAsNow(item, inp.repeat, date)) changes.repeat = inp.repeat
+    }
+  }
   if (Object.keys(changes).length === 0) {
     return { item: itemView(item, ctx), unchanged: true, message: '没有任何字段需要改动。' }
   }
@@ -344,6 +362,24 @@ function snoozeCleared(ctx: ExecContext, before: Item, after: Item): Record<stri
   const active = (i: Item) => !!i.snoozedUntil && new Date(i.snoozedUntil).getTime() > now.getTime()
   if (!active(before) || active(after)) return {}
   return { snooze_cleared: `之前推迟到 ${formatInstantZh(before.snoozedUntil!, now, ctx.tz)}，现在取消了推迟，按新的时间提醒。` }
+}
+
+/** A repeating item whose first occurrence was already over starts on the next one (domain firstUpcoming): say so. */
+function firstMoved(ctx: ExecContext, item: Item, asked: Due): Record<string, string> {
+  if (!item.repeat || (item.dueAt === asked.dueAt && item.dueDate === asked.dueDate)) return {}
+  const label = dueLabel(item, ctx.clock.now(), ctx.tz)
+  return { first_occurrence_moved: `${describeLocal(ctx, asked)} 已经过了，从下一次 ${label} 开始。` }
+}
+
+/** The rule the item would get from `input` on `date`, when it is the same as its current one (nothing to change). */
+function sameRuleAsNow(item: Item, input: RepeatInput, date: string | null): boolean {
+  if (!item.repeat || !date) return false
+  try {
+    return JSON.stringify(buildRepeatRule(input, date)) === JSON.stringify(item.repeat)
+  } catch (e) {
+    if (e instanceof RepeatError) return false
+    throw e
+  }
 }
 
 function addNote(call: CallOf<'add_note'>, ctx: ExecContext) {
@@ -392,6 +428,8 @@ function sendRequest(call: CallOf<'send_request'>, ctx: ExecContext) {
         dueDate: hasDue ? due.dueDate : item.dueDate,
         priority: inp.priority === 'normal' ? item.priority : inp.priority,
         parentId: item.kind === 'idea' ? item.id : item.parentId,
+        // a repeating task handed over as a request keeps repeating
+        repeat: inp.repeat !== undefined ? inp.repeat : item.repeat ? repeatInputOf(item.repeat) : null,
       }),
     )
     const warn = warnings(droppedTimeWarning(ctx, item, inp.due_time, hasDue ? due : null), pastWarning(ctx, req))
@@ -417,6 +455,7 @@ function sendRequest(call: CallOf<'send_request'>, ctx: ExecContext) {
       )
     }
   }
+  if (inp.repeat && !due.dueAt && !due.dueDate) throw new ToolError('invalid', 'repeat 需要 due_date：第一次是哪天（还没过的那一次）。')
   const req = touch(
     ctx,
     ctx.domain.sendRequest(actor, {
@@ -426,9 +465,10 @@ function sendRequest(call: CallOf<'send_request'>, ctx: ExecContext) {
       dueAt: due.dueAt,
       dueDate: due.dueDate,
       priority: inp.priority,
+      ...(inp.repeat ? { repeat: inp.repeat } : {}),
     }),
   )
-  return { item: itemView(req, ctx), waiting_for: to.name, ...warnings(pastWarning(ctx, req)) }
+  return { item: itemView(req, ctx), waiting_for: to.name, ...firstMoved(ctx, req, due), ...warnings(pastWarning(ctx, req)) }
 }
 
 /** send_request with an existing request: re-send (declined/closed), re-route (another person) or just update it. */
@@ -442,6 +482,11 @@ function resendRequest(ctx: ExecContext, item: Item, to: Member, inp: CallOf<'se
   }
   if (inp.priority !== 'normal' && inp.priority !== item.priority) changes.priority = inp.priority
   if (item.ownerId !== to.id) changes.ownerId = to.id
+  if (inp.repeat !== undefined && !(inp.repeat === null && !item.repeat)) {
+    const dueAfter = changes.dueAt !== undefined || changes.dueDate !== undefined ? { dueAt: changes.dueAt ?? null, dueDate: changes.dueDate ?? null } : item
+    const date = dueAfter.dueAt ? localDate(new Date(dueAfter.dueAt), ctx.tz) : (dueAfter.dueDate ?? null)
+    if (inp.repeat === null || !sameRuleAsNow(item, inp.repeat, date)) changes.repeat = inp.repeat
+  }
   if (item.status === 'declined' || isClosed(item)) changes.status = 'pending'
   if (Object.keys(changes).length === 0) {
     const already = item.status === 'pending' ? `已经在等${to.name}回复了` : `${to.name}已经${statusLabel(item.status)}`
@@ -518,9 +563,23 @@ function completeItem(call: CallOf<'complete_item'>, ctx: ExecContext) {
       `「${item.title}」是${requester}请说话人做、还在等回复的请求，什么都没有改。说话人做不了的话，请用 respond_to_request（response "decline"，原因写在 message），${requester}会收到通知。`,
     )
   }
+  if (resolution === 'skipped' && !item.repeat) {
+    throw new ToolError('not_repeating', `「${item.title}」不是重复的事项，没有“跳过一次”：不做了用 resolution "dropped"，改时间用 update_item。`)
+  }
+  if (resolution === 'skipped' && isClosed(item)) {
+    throw new ToolError('invalid', `「${item.title}」已经${statusLabel(item.status)}了，没有下一次可以跳过。`)
+  }
   const rowsBefore = droppingRequest ? (ctx.domain.getItemDetail(item.id)?.notifications ?? []) : null
   const actor = actorOf(ctx)
   let updated: Item
+  if (item.repeat && !isClosed(item) && (resolution === 'done' || resolution === 'skipped')) {
+    updated = touch(ctx, resolution === 'done' ? ctx.domain.completeItem(actor, item.id, note) : ctx.domain.skipOccurrence(actor, item.id, note))
+    const next = dueLabel(updated, ctx.clock.now(), ctx.tz)
+    return {
+      item: itemView(updated, ctx),
+      repeating: `${resolution === 'done' ? '这次完成了' : '这次跳过了'}；这是重复的事项（${describeRepeat(updated.repeat ?? item.repeat)}），没有关闭，下次是 ${next}。`,
+    }
+  }
   if (resolution === 'done') {
     updated = ctx.domain.completeItem(actor, item.id, note)
   } else {

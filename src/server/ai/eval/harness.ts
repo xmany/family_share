@@ -107,10 +107,17 @@ function seedItems(t: TestContext, seed: SeedItem[], member: (k: MemberKey) => M
     let item: Item
     if (s.kind === 'request') {
       if (!s.owner || !s.requestedBy) throw new Error(`seed ${s.key}: a request needs owner and requestedBy`)
-      item = t.domain.sendRequest(t.as(member(s.requestedBy)), { toMemberId: member(s.owner).id, title: s.title, dueAt, dueDate })
+      item = t.domain.sendRequest(t.as(member(s.requestedBy)), { toMemberId: member(s.owner).id, title: s.title, dueAt, dueDate, repeat: s.repeat })
     } else {
       const creator = s.owner ? member(s.owner) : t.wife
-      item = t.domain.createItem(t.as(creator), { kind: s.kind, title: s.title, ownerId: s.owner ? member(s.owner).id : null, dueAt, dueDate })
+      item = t.domain.createItem(t.as(creator), {
+        kind: s.kind,
+        title: s.title,
+        ownerId: s.owner ? member(s.owner).id : null,
+        dueAt,
+        dueDate,
+        repeat: s.repeat,
+      })
     }
     const ownerActor = t.as(s.owner ? member(s.owner) : t.wife)
     for (const n of s.notes ?? []) t.domain.addNote(ownerActor, item.id, n)
@@ -166,6 +173,11 @@ function matches(e: ExpectedCall, c: ObservedCall, ids: { member: (k: MemberKey)
   if (e.textIncludes) {
     const text = norm([i.details, i.text, i.note, i.message].filter(Boolean).join(' '))
     if (!e.textIncludes.some(s => text.includes(norm(s)))) return false
+  }
+  if (e.repeat) {
+    // c.input is the tool_use input as the model sent it: the RRULE string
+    const raw = typeof i.repeat === 'string' ? i.repeat.toUpperCase().replace(/\s+/g, '') : ''
+    if (e.repeat === 'none' ? raw !== '' && raw !== 'NONE' : !e.repeat.every(part => raw.includes(part))) return false
   }
   return true
 }

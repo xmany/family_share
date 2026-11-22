@@ -106,6 +106,16 @@ export const IconBell = (p: IconProps) => (
   </Svg>
 )
 
+/** A repeating item: two arrows chasing each other round */
+export const IconRepeat = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M17 2l3 3-3 3" />
+    <path d="M4 11V9a4 4 0 0 1 4-4h12" />
+    <path d="M7 22l-3-3 3-3" />
+    <path d="M20 13v2a4 4 0 0 1-4 4H4" />
+  </Svg>
+)
+
 export const IconClock = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="9" />

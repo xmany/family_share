@@ -147,7 +147,7 @@ export function buildSections(items: Item[], meId: string, now: Date, tz: string
 
 export interface WeeklyView {
   done: Item[]
-  /** active (non-idea) items created more than 7 days ago */
+  /** active (non-idea, non-repeating) items created more than 7 days ago */
   stuck: Item[]
   ideas: Item[]
   /** dated items in the next 7 days (today included), grouped by local date */
@@ -172,7 +172,8 @@ export function buildWeekly(items: Item[], now: Date, tz: string): WeeklyView {
       ideas.push(it)
       continue
     }
-    if (new Date(it.createdAt).getTime() < weekAgo) stuck.push(it)
+    // a repeating item is not stuck because it is old: each occurrence comes and goes
+    if (!it.repeat && new Date(it.createdAt).getTime() < weekAgo) stuck.push(it)
     const due = dueInfo(it, now, tz)
     if (due && due.date >= today && due.date <= last) {
       const list = byDate.get(due.date) ?? []

@@ -10,7 +10,8 @@ import { Link } from '../lib/router'
 import { api, errorMessage } from '../lib/api'
 import { mergeItems } from '../lib/store'
 import { toast } from '../lib/toast'
-import { IconBell, IconCheck, IconClock, IconIdea, IconRequest, IconSnooze, IconTask } from './Icons'
+import { describeRepeat } from '../../shared/repeat'
+import { IconBell, IconCheck, IconClock, IconIdea, IconRepeat, IconRequest, IconSnooze, IconTask } from './Icons'
 import { Avatar, Pill } from './ui'
 
 export function KindIcon({ kind, size = 20, className = '' }: { kind: ItemKind; size?: number; className?: string }) {
@@ -82,6 +83,12 @@ export function ItemRow({
               >
                 <IconClock size={14} className="flex-none" />
                 <span className="when">{due.label}</span>
+                {item.repeat && (
+                  <span className="inline-flex items-center gap-0.5 font-normal text-muted" title={describeRepeat(item.repeat)}>
+                    <IconRepeat size={13} className="flex-none" />
+                    <span className="sr-only">{describeRepeat(item.repeat)}</span>
+                  </span>
+                )}
               </span>
             )}
             {snoozed && item.snoozedUntil && (

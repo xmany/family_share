@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS items (
   requested_by     TEXT REFERENCES members(id),
   due_at           TEXT,
   due_date         TEXT,
+  repeat           TEXT,                            -- JSON RepeatRule | null (repeating item; migrate() adds it to older databases)
   snoozed_until    TEXT,
   snooze_count     INTEGER NOT NULL DEFAULT 0,
   priority         TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high')),

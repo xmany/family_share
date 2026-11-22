@@ -17,6 +17,7 @@ import type {
   Utterance,
   UtteranceVisibility,
 } from './types'
+import type { RepeatInput } from './repeat'
 
 export interface ApiError {
   error: { code: string; message: string }
@@ -49,6 +50,11 @@ export interface MeResponse {
    * served by a server that has not been restarted yet.
    */
   privateChat?: boolean
+  /**
+   * This server understands repeating items (`repeat` on items and bodies, POST /api/items/:id/skip). Same reason as
+   * privateChat: the web app shows the repeat controls only when the server it talks to keeps them.
+   */
+  repeats?: boolean
 }
 
 // GET /api/board
@@ -101,7 +107,8 @@ export interface UndoResponse {
 // POST  /api/items                    CreateItemBody
 // PATCH /api/items/:id                UpdateItemBody
 // POST  /api/items/:id/respond        RespondBody     (owner of a pending request)
-// POST  /api/items/:id/complete       CompleteBody
+// POST  /api/items/:id/complete       CompleteBody    (a repeating item moves on to its next occurrence)
+// POST  /api/items/:id/skip           CompleteBody    (repeating items: skip this occurrence)
 // POST  /api/items/:id/snooze         SnoozeBody
 // POST  /api/items/:id/notes          NoteBody
 export interface ItemResponse {
@@ -115,6 +122,8 @@ export interface CreateItemBody {
   dueAt?: string
   dueDate?: string
   priority?: Item['priority']
+  /** Repeats from the due date (needed), e.g. { freq: 'weekly', weekdays: [0] } */
+  repeat?: RepeatInput
 }
 export interface UpdateItemBody {
   kind?: Exclude<Item['kind'], 'request'>
@@ -125,6 +134,8 @@ export interface UpdateItemBody {
   dueAt?: string | null
   dueDate?: string | null
   priority?: Item['priority']
+  /** A new rule (re-anchored on the item's due date) or null to stop repeating; omit to keep it */
+  repeat?: RepeatInput | null
 }
 export interface RespondBody {
   response: 'accept' | 'decline'

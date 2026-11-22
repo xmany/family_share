@@ -12,6 +12,7 @@ import type {
   MemberRole,
   Note,
   Priority,
+  RepeatRule,
   ScheduledNotification,
   Utterance,
   UtteranceSource,
@@ -19,6 +20,8 @@ import type {
   UtteranceVisibility,
 } from '../../shared/types'
 import { ACTIVE_STATUSES, CLOSED_STATUSES } from '../../shared/types'
+import type { RepeatInput } from '../../shared/repeat'
+import { RepeatError, buildRepeatRule, sameRepeat } from '../../shared/repeat'
 import type { Bus } from '../bus'
 import type { Config } from '../config'
 import type { Db } from '../db/db'
@@ -43,7 +46,7 @@ import type {
   UpdateItemInput,
 } from './types'
 import { DomainError } from './types'
-import type { FieldChanges, NameOf } from './describe'
+import type { FieldChanges, NameOf, OccurrenceMove } from './describe'
 import {
   clip,
   kindLabel,
@@ -52,6 +55,7 @@ import {
   summarizeCreated,
   summarizeFieldsUpdated,
   summarizeNote,
+  summarizeOccurrenceMoved,
   summarizeReassigned,
   summarizeReminderCancelled,
   summarizeReminderSet,
@@ -77,6 +81,8 @@ import {
   requestReachesOwnerAt,
   timingKeys,
 } from './policy'
+import type { Occurrence } from './occurrences'
+import { dueParts, movedTo, nextOccurrenceOf, occurrenceOver, rolloverTarget } from './occurrences'
 import type { EventRow, ItemRow, NotificationRowLite, UtteranceRow } from './repo'
 import {
   ACTIVE_SQL,
@@ -138,6 +144,7 @@ const REVERTIBLE_FIELDS = [
   'ownerId',
   'dueAt',
   'dueDate',
+  'repeat',
   'snoozedUntil',
   'snoozeCount',
   'priority',
@@ -152,10 +159,11 @@ type ItemPatch = Partial<Pick<Item, RevertibleField>>
 /**
  * Fields that undo reverts together or not at all: reverting dueDate while a later edit kept a new dueAt would
  * leave both set, and reverting respondedAt/completedAt without the status would leave a half-reverted state.
+ * A repeating item's due and its rule (whose anchor moves with each occurrence) go together too.
  */
 const REVERT_GROUPS: readonly (readonly RevertibleField[])[] = [
   ['status', 'completedAt', 'respondedAt'],
-  ['dueAt', 'dueDate'],
+  ['dueAt', 'dueDate', 'repeat'],
   ['snoozedUntil', 'snoozeCount'],
   ['kind'],
   ['title'],
@@ -296,6 +304,30 @@ export function createDomain(deps: DomainDeps): Domain {
     if (typeof v !== 'string' || !getItemRow(db, v)) return invalid(`找不到上级事项（${String(v)}）`)
     if (v === selfId) return invalid('事项不能是自己的上级')
     return v
+  }
+
+  /** The rule for a repeating item; its due (dueAt / dueDate, already set on `item`) is the first occurrence. */
+  function normRepeat(tx: Tx, input: unknown, item: Pick<Item, 'kind' | 'dueAt' | 'dueDate'>): RepeatRule {
+    if (!input || typeof input !== 'object') return invalid('重复方式格式不对')
+    if (item.kind === 'idea') return invalid('想法没有日期，不能重复；要定期做的事请建成待办（kind: task）')
+    const due = dueParts(item, tx.tz)
+    if (!due) return invalid('重复的事项需要一个日期：第一次是哪天（dueAt 或 dueDate）')
+    try {
+      return buildRepeatRule(input as RepeatInput, due.date)
+    } catch (e) {
+      if (e instanceof RepeatError) return invalid(e.message)
+      throw e
+    }
+  }
+
+  /**
+   * A new repeating item never starts on an occurrence that is already over (每周日 21:00 said on Sunday at 22:00):
+   * it starts on the next one.
+   */
+  function firstUpcoming(tx: Tx, item: Item): void {
+    if (!item.repeat || !occurrenceOver(item, tx.now, tx.tz)) return
+    const next = nextOccurrenceOf(item, tx.tz, tx.now)
+    if (next) Object.assign(item, movedTo(item, next))
   }
 
   function normAliases(v: unknown): string[] {
@@ -576,6 +608,7 @@ export function createDomain(deps: DomainDeps): Domain {
       requestedBy: item.requestedBy,
       dueAt: item.dueAt,
       dueDate: item.dueDate,
+      repeat: item.repeat,
       priority: item.priority,
       parentId: item.parentId,
       tags: item.tags,
@@ -708,6 +741,10 @@ export function createDomain(deps: DomainDeps): Domain {
       next.dueAt = null // converting a dated task into an idea drops the date
       next.dueDate = null
     }
+    // A new rule starts the series on the (new) due date. Without one the series stays: a new due date moves only the
+    // current occurrence (the anchor keeps the series' position); no date at all means nothing to repeat.
+    if (c.repeat !== undefined) next.repeat = c.repeat === null ? null : normRepeat(tx, c.repeat, next)
+    else if (next.repeat && !next.dueAt && !next.dueDate) next.repeat = null
 
     if (c.ownerId !== undefined) {
       if (c.ownerId === null) {
@@ -755,7 +792,7 @@ export function createDomain(deps: DomainDeps): Domain {
     const env = summaryEnv(tx)
     let lastEventId: number | null = null
 
-    const fieldDiff = diff(before, next, ['kind', 'title', 'details', 'priority', 'tags', 'parentId', 'dueAt', 'dueDate', ...snoozeWithFields])
+    const fieldDiff = diff(before, next, ['kind', 'title', 'details', 'priority', 'tags', 'parentId', 'dueAt', 'dueDate', 'repeat', ...snoozeWithFields])
     if (fieldDiff) {
       const a = fieldDiff.after
       if ('title' in a) fc.title = { from: before.title, to: next.title }
@@ -765,6 +802,7 @@ export function createDomain(deps: DomainDeps): Domain {
       if ('tags' in a) fc.tags = next.tags
       if ('parentId' in a) fc.parentChanged = true
       if ('dueAt' in a || 'dueDate' in a) fc.due = { dueAt: next.dueAt, dueDate: next.dueDate }
+      if ('repeat' in a && !sameRepeat(before.repeat, next.repeat)) fc.repeat = { to: next.repeat }
       lastEventId = insertEvent(tx, before.id, 'item_updated', summarizeFieldsUpdated(next.title, fc, env), { ...fieldDiff, ...extra })
     }
 
@@ -899,6 +937,59 @@ export function createDomain(deps: DomainDeps): Domain {
       ).run(n.title, n.body, JSON.stringify(n.actions ?? []), n.respectQuietHours === false ? 0 : 1, fireAt?.toISOString() ?? null, ex.id)
       if (fireAt && fireAt.getTime() <= tx.now.getTime()) tx.wake = true
     }
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // repeating items (occurrences.ts)
+
+  /**
+   * Moves a repeating item on to its next occurrence instead of closing it: completed (done), skipped, or gone by
+   * without being completed (missed, the scheduler's rollover). One event — item_completed for done, item_updated
+   * otherwise — with before/after of the due fields and the rule's anchor, so undo puts the occurrence back.
+   * The next occurrence starts fresh: 进行中 / 卡住了 go back to 待办 (an accepted request stays accepted), a running
+   * snooze ends, and extra pings set for the occurrence that is over (before the next one's day) are cancelled.
+   */
+  function advanceOccurrence(tx: Tx, before: Item, move: OccurrenceMove, opts: { message?: string | null; target?: Occurrence } = {}): Item {
+    if (!before.repeat) return invalid('这个事项不重复')
+    if (isClosed(before.status)) return invalid(`这个事项已经${statusLabel(before.status)}了`)
+    const target = opts.target ?? nextOccurrenceOf(before, tx.tz, tx.now)
+    if (!target) return invalid('算不出下一次的日期')
+    const next: Item = { ...movedTo(before, target), tags: [...before.tags] }
+    if (before.status === 'in_progress' || before.status === 'blocked') next.status = before.kind === 'request' ? 'accepted' : 'open'
+    if (next.snoozedUntil && new Date(next.snoozedUntil).getTime() > tx.now.getTime()) next.snoozedUntil = null
+    const d = diff(before, next, ['status', 'dueAt', 'dueDate', 'repeat', 'snoozedUntil']) ?? { before: {}, after: {} }
+    const noteId = opts.message ? insertNote(tx, before.id, opts.message).id : null
+    const occurrence = dueParts(before, tx.tz)?.date ?? null
+    const eventId = insertEvent(
+      tx,
+      before.id,
+      move === 'done' ? 'item_completed' : 'item_updated',
+      summarizeOccurrenceMoved(before, move, before, next, summaryEnv(tx)),
+      {
+        ...d,
+        occurrence: move,
+        occurrenceDate: occurrence,
+        ...(opts.message ? { message: opts.message } : {}),
+        ...(noteId ? { noteId } : {}),
+      },
+    )
+    saveItem(tx, next)
+
+    const cancelled: string[] = []
+    const nextDayStart = zonedToUtc(target.date, '00:00', tx.tz).getTime()
+    for (const n of outbox.scheduledForItem(next.id)) {
+      if (n.kind !== 'explicit' || !n.dedupeKey.startsWith('explicit:')) continue
+      if (new Date(n.fireAt).getTime() < nextDayStart && outbox.cancel(n.id)) cancelled.push(n.id)
+    }
+    if (move === 'done' && next.kind === 'request' && occurrence) {
+      const round = requestRounds(db, next.id)
+      for (const n of planRequestAnswered(next, 'done', round, policyEnv(tx), { message: opts.message ?? null, occurrence })) {
+        upsertNotification(tx, n)
+      }
+    }
+    cancelled.push(...reconcileTiming(tx, next))
+    if (cancelled.length) patchEventPayload(eventId, { cancelled })
+    return requireItem(next.id)
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1110,6 +1201,10 @@ export function createDomain(deps: DomainDeps): Domain {
       if (item.kind === 'request' && item.ownerId === item.requestedBy && orig.ownerId !== item.ownerId) {
         item.ownerId = orig.ownerId
         fixed.push('ownerId')
+      }
+      if (item.repeat && (item.kind === 'idea' || (!item.dueAt && !item.dueDate))) {
+        item.repeat = null // nothing to repeat without a date
+        fixed.push('repeat')
       }
       if (fixed.length === n) break
     }
@@ -1378,6 +1473,7 @@ export function createDomain(deps: DomainDeps): Domain {
         if (inp.kind === 'idea' && (dueAt || dueDate)) invalid('想法没有截止时间；要定时间请建成待办（kind: task）')
         const remindAt = inp.remindAt ? normInstant(tx, inp.remindAt, '提醒时间') : null
         if (remindAt && new Date(remindAt).getTime() <= tx.now.getTime()) invalid('提醒时间已经过了')
+        const repeat = inp.repeat ? normRepeat(tx, inp.repeat, { kind: inp.kind, dueAt, dueDate }) : null
 
         const item: Item = {
           id: newId('i'),
@@ -1390,6 +1486,7 @@ export function createDomain(deps: DomainDeps): Domain {
           requestedBy: null,
           dueAt,
           dueDate,
+          repeat,
           remindAt: null,
           snoozedUntil: null,
           snoozeCount: 0,
@@ -1402,6 +1499,7 @@ export function createDomain(deps: DomainDeps): Domain {
           respondedAt: null,
           lastActivityAt: tx.nowIso,
         }
+        firstUpcoming(tx, item)
         insertItemRow(db, item)
         const env = summaryEnv(tx)
         const eventId = insertEvent(tx, item.id, 'item_created', summarizeCreated(item, creator.id, env), {
@@ -1413,7 +1511,7 @@ export function createDomain(deps: DomainDeps): Domain {
         if (ownerId && ownerId !== creator.id) for (const n of planAssigned(item, eventId, penv)) upsertNotification(tx, n)
         reconcileTiming(tx, item)
         // a reminder item already pings its owner exactly at dueAt; a remindAt at the same instant would ping twice
-        const duplicatesOwnPing = item.kind === 'reminder' && !!dueAt && remindAt === dueAt
+        const duplicatesOwnPing = item.kind === 'reminder' && !!item.dueAt && remindAt === item.dueAt
         if (remindAt && !duplicatesOwnPing) {
           const to = ownerId ?? creator.id
           const fire = new Date(remindAt)
@@ -1432,7 +1530,18 @@ export function createDomain(deps: DomainDeps): Domain {
     },
 
     updateItem(actor, id, changes, reason) {
-      return write(actor, tx => applyUpdate(tx, requireItem(id), changes, { reason: reason ?? null }))
+      return write(actor, tx => {
+        const item = requireItem(id)
+        const c = changes ?? {}
+        // "done" on a repeating item completes this occurrence (like completeItem); other changes apply first
+        if (c.status === 'done' && !isClosed(item.status) && (item.repeat || c.repeat)) {
+          const { status: _done, ...rest } = c
+          const cur = Object.keys(rest).length ? applyUpdate(tx, item, rest, { reason: reason ?? null }) : item
+          if (cur.repeat && !isClosed(cur.status)) return advanceOccurrence(tx, cur, 'done')
+          return applyUpdate(tx, cur, { status: 'done' }, { reason: reason ?? null })
+        }
+        return applyUpdate(tx, item, c, { reason: reason ?? null })
+      })
     },
 
     addNote(actor, itemId, text) {
@@ -1460,6 +1569,7 @@ export function createDomain(deps: DomainDeps): Domain {
         const dueAt = inp.dueAt ? normInstant(tx, inp.dueAt, '时间') : null
         const dueDate = inp.dueDate ? normDate(inp.dueDate) : null
         if (dueAt && dueDate) invalid('dueAt 和 dueDate 只能设一个：有具体时间用 dueAt，只有日期用 dueDate')
+        const repeat = inp.repeat ? normRepeat(tx, inp.repeat, { kind: 'request', dueAt, dueDate }) : null
         const item: Item = {
           id: newId('i'),
           kind: 'request',
@@ -1471,6 +1581,7 @@ export function createDomain(deps: DomainDeps): Domain {
           requestedBy: requester.id,
           dueAt,
           dueDate,
+          repeat,
           remindAt: null,
           snoozedUntil: null,
           snoozeCount: 0,
@@ -1483,6 +1594,7 @@ export function createDomain(deps: DomainDeps): Domain {
           respondedAt: null,
           lastActivityAt: tx.nowIso,
         }
+        firstUpcoming(tx, item)
         insertItemRow(db, item)
         const round = requestRounds(db, item.id) + 1
         insertEvent(tx, item.id, 'request_sent', summarizeRequestSent(item, round, summaryEnv(tx)), {
@@ -1515,7 +1627,17 @@ export function createDomain(deps: DomainDeps): Domain {
       return write(actor, tx => {
         const item = requireItem(itemId)
         const msg = normText(note, '备注')
+        if (item.repeat && !isClosed(item.status)) return advanceOccurrence(tx, item, 'done', { message: msg })
         return applyUpdate(tx, item, { status: 'done' }, { message: msg })
+      })
+    },
+
+    skipOccurrence(actor, itemId, note) {
+      return write(actor, tx => {
+        const item = requireItem(itemId)
+        if (!item.repeat) invalid('只有重复的事项可以跳过一次；这件事不做了请标记「不做了」')
+        if (isClosed(item.status)) invalid(`这个事项已经${statusLabel(item.status)}了`)
+        return advanceOccurrence(tx, item, 'skipped', { message: normText(note, '备注') })
       })
     },
 
@@ -1584,6 +1706,32 @@ export function createDomain(deps: DomainDeps): Domain {
           if (item) saveItem(tx, item)
         }
         tx.dirty = true
+      })
+    },
+
+    rollOverRepeats() {
+      const family = getFamilyRow(db)
+      if (!family) return 0
+      const now = clock.now()
+      const tz = family.timezone
+      const snoozed = (i: Item) => !!i.snoozedUntil && new Date(i.snoozedUntil).getTime() > now.getTime()
+      // declined requests wait for the requester; a snoozed item waits until its snooze is over
+      const rows = db
+        .prepare(`SELECT * FROM items WHERE repeat IS NOT NULL AND status IN ('open', 'pending', 'accepted', 'in_progress', 'blocked')`)
+        .all() as ItemRow[]
+      const due = rowsToItems(db, rows).filter(i => !snoozed(i) && rolloverTarget(i, now, tz))
+      if (!due.length) return 0
+      return write({ type: 'system', memberId: null }, tx => {
+        let moved = 0
+        for (const { id } of due) {
+          const item = loadItem(id)
+          if (!item?.repeat || isClosed(item.status) || item.status === 'declined' || snoozed(item)) continue
+          const target = rolloverTarget(item, tx.now, tx.tz)
+          if (!target) continue
+          advanceOccurrence(tx, item, 'missed', { target })
+          moved++
+        }
+        return moved
       })
     },
 

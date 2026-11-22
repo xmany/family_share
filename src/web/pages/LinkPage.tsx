@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { LinkViewResponse } from '../../shared/api'
 import type { Member } from '../../shared/types'
+import { describeRepeat } from '../../shared/repeat'
 import { api, errorMessage, isApiError } from '../lib/api'
 import { dueInfo, isActive } from '../lib/board'
 import { KIND_LABEL } from '../lib/labels'
@@ -25,6 +26,7 @@ export function LinkPage({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [doneHere, setDoneHere] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -46,7 +48,17 @@ export function LinkPage({ token }: { token: string }) {
   const act = async (action: 'accept' | 'decline' | 'done', note?: string) => {
     const r = await api.linkAction(token, note ? { action, message: note } : { action })
     setData(r)
-    setMessage(action === 'accept' ? '已接受，已经告诉对方了' : action === 'decline' ? '已告诉对方你做不了' : '完成了，辛苦啦')
+    const next = r.item.repeat ? dueInfo(r.item, new Date(), r.family.timezone) : null
+    setMessage(
+      action === 'accept'
+        ? '已接受，已经告诉对方了'
+        : action === 'decline'
+          ? '已告诉对方你做不了'
+          : next
+            ? `这次完成了，下次 ${next.label}`
+            : '完成了，辛苦啦',
+    )
+    if (action === 'done') setDoneHere(true)
   }
 
   const header = (
@@ -80,7 +92,8 @@ export function LinkPage({ token }: { token: string }) {
   const due = dueInfo(item, nowD, tz)
   const active = isActive(item)
   const canRespond = item.status === 'pending' && allowed.includes('accept') && allowed.includes('decline')
-  const canDone = active && allowed.includes('done') && item.status !== 'pending' && item.status !== 'declined'
+  // a repeating item stays active after 完成: one tap here completes one occurrence
+  const canDone = active && allowed.includes('done') && item.status !== 'pending' && item.status !== 'declined' && !(item.repeat && doneHere)
 
   return (
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col pb-[calc(env(safe-area-inset-bottom)+24px)]">
@@ -104,6 +117,7 @@ export function LinkPage({ token }: { token: string }) {
             <p className={`mt-2 inline-flex items-center gap-1.5 text-[16px] ${due.overdue && active ? 'font-semibold text-danger' : ''}`}>
               <IconClock size={18} />
               <span className="when">{due.label}</span>
+              {item.repeat && <span className="text-muted">· {describeRepeat(item.repeat)}</span>}
             </p>
           )}
           {item.details && <p className="well mt-3 px-3.5 py-3 text-[15px] whitespace-pre-wrap text-ink-2">{item.details}</p>}

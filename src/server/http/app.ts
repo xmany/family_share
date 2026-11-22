@@ -41,6 +41,7 @@ import {
   handleWechatVerify,
   rejectUnsignedWechatCallback,
 } from '../wechat/index'
+import { LINK_TTL_MS } from '../wechat/format'
 import { sendTestNotification, sttOptionsFor } from './actions'
 import type { SessionInfo } from './auth'
 import {
@@ -155,6 +156,18 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
     return item
   }
 
+  /**
+   * A repeating item moved on to another occurrence (completed, skipped or rolled over) at or after `since`: a 完成 from
+   * a notification or link sent before that was about an occurrence that is already dealt with.
+   */
+  function occurrenceMovedSince(item: Item, since: Date): boolean {
+    if (!item.repeat) return false
+    const t = since.getTime()
+    return (domain.getItemDetail(item.id)?.events ?? []).some(
+      e => !e.undone && typeof e.payload.occurrence === 'string' && new Date(e.createdAt).getTime() >= t,
+    )
+  }
+
   function requireAdult(c: C) {
     if (me(c).role !== 'adult') throw new HttpError(403, 'forbidden', '只有大人可以管理家庭成员')
   }
@@ -263,6 +276,7 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
       sttEnabled: ctx.stt !== null,
       channels: ctx.notifier.channels(),
       privateChat: true,
+      repeats: true,
     }
     return c.json(res)
   })
@@ -290,6 +304,7 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
         dueAt: b.dueAt,
         dueDate: b.dueDate,
         priority: b.priority,
+        repeat: b.repeat,
       })
     } else {
       item = domain.createItem(actor, {
@@ -300,6 +315,7 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
         dueAt: b.dueAt,
         dueDate: b.dueDate,
         priority: b.priority,
+        repeat: b.repeat,
       })
     }
     return c.json({ item } satisfies ItemResponse)
@@ -320,6 +336,12 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
   app.post('/api/items/:id/complete', async c => {
     const b = await body(c, completeSchema)
     const item = domain.completeItem(actorOf(c), c.req.param('id'), b.note)
+    return c.json({ item } satisfies ItemResponse)
+  })
+
+  app.post('/api/items/:id/skip', async c => {
+    const b = await body(c, completeSchema)
+    const item = domain.skipOccurrence(actorOf(c), c.req.param('id'), b.note)
     return c.json({ item } satisfies ItemResponse)
   })
 
@@ -435,6 +457,7 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
     // Button taps can be repeated (retries, two devices): an already-applied action is a success.
     const already =
       (action === 'done' && item.status === 'done') ||
+      (action === 'done' && occurrenceMovedSince(item, new Date(n.sentAt ?? n.fireAt))) ||
       (action === 'accept' && item.status === 'accepted') ||
       (action === 'decline' && item.status === 'declined')
     if (!already) {
@@ -562,8 +585,11 @@ export function createApp(ctx: AppContext, opts: AppOptions = {}): Hono<Env> {
     const b = await body(c, linkActionSchema)
     if (!p.a.includes(b.action)) throw new HttpError(403, 'forbidden', '这个链接不能做这个操作')
     const actor: Actor = { type: 'member', memberId: p.m }
-    if (b.action === 'done') domain.completeItem(actor, item.id, b.message)
-    else domain.respondToRequest(actor, item.id, b.action, b.message)
+    if (b.action === 'done') {
+      // a repeating item that moved on since the link was sent: that occurrence is done, a second tap must not do the next
+      const issued = new Date(p.t !== undefined ? p.t * 1000 : p.e * 1000 - LINK_TTL_MS)
+      if (!occurrenceMovedSince(item, issued)) domain.completeItem(actor, item.id, b.message)
+    } else domain.respondToRequest(actor, item.id, b.action, b.message)
     return c.json(linkView(p, itemOr404(item.id)))
   })
 

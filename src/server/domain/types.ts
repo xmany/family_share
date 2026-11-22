@@ -1,3 +1,4 @@
+import type { RepeatInput } from '../../shared/repeat'
 import type {
   BoardResponse,
   ItemDetailResponse,
@@ -54,6 +55,8 @@ export interface CreateItemInput {
   tags?: string[]
   /** Optional explicit reminder for the owner at this instant */
   remindAt?: string | null
+  /** Makes it a repeating item (task / reminder; needs a due, which is the first occurrence) */
+  repeat?: RepeatInput | null
 }
 
 export interface UpdateItemInput {
@@ -68,6 +71,11 @@ export interface UpdateItemInput {
   priority?: Priority
   tags?: string[]
   parentId?: string | null
+  /**
+   * Starts repeating or changes how (re-anchored on the item's due date, which is the next occurrence); null stops
+   * repeating. Omit to keep the series: a new due date alone moves only the current occurrence.
+   */
+  repeat?: RepeatInput | null
 }
 
 export interface SendRequestInput {
@@ -78,6 +86,8 @@ export interface SendRequestInput {
   dueDate?: string | null
   priority?: Priority
   parentId?: string | null
+  /** A repeating request (needs a due, the first occurrence): accepted once, then each occurrence is completed */
+  repeat?: RepeatInput | null
 }
 
 export interface SetReminderInput {
@@ -176,10 +186,18 @@ export interface Domain {
   addNote(actor: Actor, itemId: string, text: string): Note
   sendRequest(actor: Actor, input: SendRequestInput): Item
   respondToRequest(actor: Actor, itemId: string, response: 'accept' | 'decline', message?: string): Item
+  /** Closes the item as done. A repeating item instead moves on to its next occurrence (status stays active). */
   completeItem(actor: Actor, itemId: string, note?: string): Item
+  /** A repeating item: this occurrence will not happen; move on to the next one. */
+  skipOccurrence(actor: Actor, itemId: string, note?: string): Item
   snoozeItem(actor: Actor, itemId: string, until: Date): Item
   setReminder(actor: Actor, input: SetReminderInput): ScheduledNotification
   cancelReminder(actor: Actor, notificationId: string): void
+  /**
+   * Scheduler: moves repeating items whose occurrence went by without being completed on to their next occurrence
+   * (see occurrences.ts rolloverAt). System actor; returns how many items moved.
+   */
+  rollOverRepeats(): number
 
   // ---- utterances
   createUtterance(memberId: string, source: UtteranceSource, text: string, opts?: NewUtteranceOptions): Utterance

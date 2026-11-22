@@ -5,6 +5,7 @@
 import type { Item, Member, Utterance, UtteranceSource, UtteranceVisibility } from '../../shared/types'
 import type { Domain } from '../domain/types'
 import { clip, dueLabel, nameLookup } from '../domain/describe'
+import { describeRepeat } from '../../shared/repeat'
 import {
   DAY,
   WEEKDAY_ZH,
@@ -258,6 +259,7 @@ function renderItem(it: Item, d: SnapshotData, nameOf: (id: string | null) => st
   if (it.requestedBy) parts.push(`请求人 ${nameOf(it.requestedBy)}`)
   const due = dueLabel(it, d.now, d.tz)
   if (due) parts.push(`截止 ${due}（${it.dueAt ? localStamp(it.dueAt, d.tz) : it.dueDate}）`)
+  if (it.repeat) parts.push(`重复 ${describeRepeat(it.repeat)}（截止是这一次）`)
   if (it.snoozedUntil && new Date(it.snoozedUntil).getTime() > d.now.getTime()) {
     parts.push(`推迟到 ${formatInstantZh(it.snoozedUntil, d.now, d.tz)}`)
   }

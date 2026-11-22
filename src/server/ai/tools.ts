@@ -9,6 +9,8 @@
 // SCHEMAS re-validates every input on our side before anything touches the domain.
 import type { BetaTool } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import { z } from 'zod'
+import type { RepeatInput } from '../../shared/repeat'
+import { MAX_REPEAT_INTERVAL } from '../../shared/repeat'
 
 // Ids come from src/server/ids.ts: prefix + 10 chars of 0-9a-z without l/o.
 export const ITEM_ID_RE = /^i_[0-9a-km-np-z]{10}$/
@@ -44,6 +46,10 @@ const DUE_TIME = 'Local wall-clock time HH:MM (24h), e.g. "18:30". Only together
 /** Rescheduling: a date without a time turns a timed item into a date-only one, so the old time must be repeated. */
 const NEW_DUE_TIME = `${DUE_TIME} When the item already has a time and only the day changes (改到周日), send its current time again; a date without a time removes the time.`
 const PRIORITY = '"high" only when the speaker signals urgency (急 / 马上 / 一定要 / urgent); "low" when they say it does not matter; otherwise "normal".'
+/** One string (RFC 5545 RRULE subset) keeps the strict-mode optional-parameter budget: weekdays and interval included. */
+const REPEAT_FORMAT =
+  'An RRULE: "FREQ=DAILY" (每天), "FREQ=WEEKLY" (every week on the due date\'s weekday, 每周日), "FREQ=WEEKLY;BYDAY=TU,FR" (每周二和周五), "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" (工作日), "FREQ=WEEKLY;INTERVAL=2" (隔周 / 每两周), "FREQ=DAILY;INTERVAL=3" (每三天), "FREQ=MONTHLY" (on the due date\'s day of the month, 每月15号), "FREQ=YEARLY". due_date is the first occurrence that is still ahead.'
+const REPEAT = `Only when the speaker says it repeats (每天 / 每周X / 工作日 / 隔周 / 每月 / 每年). ${REPEAT_FORMAT} Omit for a one-off.`
 
 export const TOOLS: BetaTool[] = [
   tool(
@@ -68,6 +74,7 @@ export const TOOLS: BetaTool[] = [
       details: str('Extra facts the speaker gave (place, amount, phone number, reason). Omit if none.'),
       priority: oneOf(['low', 'normal', 'high'], PRIORITY),
       allow_duplicate: bool('false normally. true only when the speaker clearly wants a second, separate item with the same title as an active one.'),
+      repeat: str(`${REPEAT} Needs due_date; not for ideas.`),
     },
     ['kind', 'title', 'explicit_assignment', 'priority', 'allow_duplicate'],
   ),
@@ -85,6 +92,9 @@ export const TOOLS: BetaTool[] = [
       due_time: str(`${NEW_DUE_TIME} Only with due_change "set".`),
       priority: oneOf(['low', 'normal', 'high'], 'New priority, only if it changes.'),
       status: oneOf(['open', 'in_progress', 'blocked'], 'New progress status, only if it changes: started (在弄了 / 挂出去了) = in_progress; waiting on something outside the family = blocked; open re-opens a closed task.'),
+      repeat: str(
+        `Only to make the item repeat, or to change its series from now on (以后改成周一: also due_change "set" to the next occurrence). ${REPEAT_FORMAT} "NONE" stops repeating and keeps this occurrence. Omit to keep the series: moving only this time (这周改到周一) is due_change "set" without repeat.`,
+      ),
     },
     ['item_id', 'due_change', 'explicit_handover'],
   ),
@@ -106,6 +116,7 @@ export const TOOLS: BetaTool[] = [
       details: str('Context for the other person, written so it reads right to them, e.g. "他九点有个会". Omit if none.'),
       priority: oneOf(['low', 'normal', 'high'], PRIORITY),
       allow_duplicate: bool('false normally; true only when the speaker clearly wants a separate request with the same title as an active item.'),
+      repeat: str(`${REPEAT} Needs a due date. They accept once; each time is then completed on its own.`),
     },
     ['to_member_id', 'title', 'priority', 'allow_duplicate'],
   ),
@@ -121,10 +132,13 @@ export const TOOLS: BetaTool[] = [
   ),
   tool(
     'complete_item',
-    'Close an item. resolution "done" when it was finished (买好了 / 搞定了 / 弄好了), "dropped" when it is no longer needed (算了 / 不用了 / 取消 / 删掉 / 先不买了). Nothing is ever deleted. Not for a pending request addressed to the speaker (answer it with respond_to_request), and not for cancelling only an extra ping (cancel_reminder). On a request, the result says whether the other person was notified (notified / not_notified).',
+    'Close an item. resolution "done" when it was finished (买好了 / 搞定了 / 弄好了), "dropped" when it is no longer needed (算了 / 不用了 / 取消 / 删掉 / 先不买了). Nothing is ever deleted. Not for a pending request addressed to the speaker (answer it with respond_to_request), and not for cancelling only an extra ping (cancel_reminder). On a request, the result says whether the other person was notified (notified / not_notified). A repeating item (重复 in active_items) is not closed by "done" or "skipped": that time is finished or skipped and the item moves on to its next occurrence (the result says when); "dropped" ends the whole series.',
     {
       item_id: str(ITEM),
-      resolution: oneOf(['done', 'dropped'], 'How it ended.'),
+      resolution: oneOf(
+        ['done', 'dropped', 'skipped'],
+        'How it ended. "skipped" only for a repeating item whose current time will not happen (这周不用倒了 / 这次跳过); "dropped" on a repeating item = 以后都不用了.',
+      ),
       note: str('Optional short note, e.g. why it was dropped or how it went.'),
     },
     ['item_id', 'resolution'],
@@ -185,6 +199,79 @@ const LocalTime = z.preprocess(
 )
 const Priority = z.enum(['low', 'normal', 'high'])
 const Title = z.string().trim().min(1, '标题不能为空').max(200, '标题太长了（最多 200 个字）')
+
+const RRULE_DAYS: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 }
+const RRULE_FREQ: Record<string, RepeatInput['freq']> = { DAILY: 'daily', WEEKLY: 'weekly', MONTHLY: 'monthly', YEARLY: 'yearly' }
+const REPEAT_HINT = '重复规则写成 RRULE，例如 "FREQ=WEEKLY"、"FREQ=WEEKLY;BYDAY=TU,FR"、"FREQ=WEEKLY;INTERVAL=2"、"FREQ=MONTHLY"'
+
+/**
+ * The tools' `repeat` string → RepeatInput, or null for "NONE". A subset of RFC 5545 RRULE: FREQ, INTERVAL, BYDAY
+ * (weekly; DAILY with BYDAY is read as weekly on those days), BYMONTHDAY (monthly / yearly), BYMONTH (yearly).
+ * Anything else (COUNT, UNTIL, 1SA = "first Saturday", lunar dates) is refused with a message saying what is possible.
+ */
+export function parseRepeatText(text: string): { ok: true; value: RepeatInput | null } | { ok: false; message: string } {
+  const s = text.trim().replace(/^RRULE:/i, '').replace(/\s+/g, '').toUpperCase()
+  if (s === 'NONE' || s === '') return { ok: true, value: null }
+  const fail = (why: string) => ({ ok: false as const, message: `${why}。${REPEAT_HINT}` })
+  const parts = new Map<string, string>()
+  for (const part of s.split(';').filter(Boolean)) {
+    const [k, v, ...rest] = part.split('=')
+    if (!k || !v || rest.length) return fail(`看不懂重复规则「${text}」`)
+    if (parts.has(k)) return fail(`${k} 重复出现了`)
+    parts.set(k, v)
+  }
+  const unsupported = [...parts.keys()].filter(k => !['FREQ', 'INTERVAL', 'BYDAY', 'BYMONTHDAY', 'BYMONTH'].includes(k))
+  if (unsupported.length) {
+    return fail(`不支持 ${unsupported.join('、')}（没有结束日期和次数，只能一直重复，不要了再停）`)
+  }
+  let freq = RRULE_FREQ[parts.get('FREQ') ?? '']
+  if (!freq) return fail('FREQ 只能是 DAILY、WEEKLY、MONTHLY 或 YEARLY')
+  const out: RepeatInput = { freq }
+  const intText = parts.get('INTERVAL')
+  if (intText !== undefined) {
+    const n = Number(intText)
+    if (!Number.isInteger(n) || n < 1 || n > MAX_REPEAT_INTERVAL) return fail(`INTERVAL 需要是 1 到 ${MAX_REPEAT_INTERVAL} 的整数`)
+    out.interval = n
+  }
+  const byDay = parts.get('BYDAY')
+  if (byDay !== undefined) {
+    const days = byDay.split(',')
+    if (days.some(d => !(d in RRULE_DAYS))) {
+      return fail('BYDAY 只能是 MO,TU,WE,TH,FR,SA,SU（不支持“每月第几个星期几”这种规则：这种只能建下一次，并告诉说话人不能自动重复）')
+    }
+    if (freq === 'daily') {
+      if ((out.interval ?? 1) !== 1) return fail('带 BYDAY 时请用 FREQ=WEEKLY')
+      freq = out.freq = 'weekly'
+    }
+    if (freq !== 'weekly') return fail('BYDAY 只能和 FREQ=WEEKLY 一起用；每月或每年按 due_date 那天重复')
+    out.weekdays = days.map(d => RRULE_DAYS[d]!)
+  }
+  const one = (key: string, min: number, max: number): number | null | undefined => {
+    const v = parts.get(key)
+    if (v === undefined) return undefined
+    const n = Number(v)
+    return Number.isInteger(n) && n >= min && n <= max ? n : null
+  }
+  const monthDay = one('BYMONTHDAY', 1, 31)
+  if (monthDay !== undefined) {
+    if (monthDay === null || (freq !== 'monthly' && freq !== 'yearly')) return fail('BYMONTHDAY 只能是一个 1 到 31 的数，和 FREQ=MONTHLY 或 YEARLY 一起用')
+    out.monthDay = monthDay
+  }
+  const month = one('BYMONTH', 1, 12)
+  if (month !== undefined) {
+    if (month === null || freq !== 'yearly') return fail('BYMONTH 只能是一个 1 到 12 的数，和 FREQ=YEARLY 一起用')
+    out.month = month
+  }
+  return { ok: true, value: out }
+}
+
+/** `repeat` on the wire → RepeatInput | null (NONE); a bad rule is an is_error result Claude can correct. */
+const Repeat = z.string().transform((v, ctx) => {
+  const r = parseRepeatText(v)
+  if (r.ok) return r.value
+  ctx.addIssue({ code: 'custom', message: r.message })
+  return z.NEVER
+})
 const Text = (max: number) => z.string().trim().min(1).max(max)
 
 export const SCHEMAS = {
@@ -199,6 +286,7 @@ export const SCHEMAS = {
     details: Text(2000).optional(),
     priority: Priority,
     allow_duplicate: z.boolean(),
+    repeat: Repeat.optional(),
   }),
   update_item: z.strictObject({
     item_id: ItemId,
@@ -211,6 +299,7 @@ export const SCHEMAS = {
     due_time: LocalTime.optional(),
     priority: Priority.optional(),
     status: z.enum(['open', 'in_progress', 'blocked']).optional(),
+    repeat: Repeat.optional(),
   }),
   add_note: z.strictObject({ item_id: ItemId, text: Text(2000) }),
   send_request: z.strictObject({
@@ -222,13 +311,14 @@ export const SCHEMAS = {
     details: Text(2000).optional(),
     priority: Priority,
     allow_duplicate: z.boolean(),
+    repeat: Repeat.optional(),
   }),
   respond_to_request: z.strictObject({
     item_id: ItemId,
     response: z.enum(['accept', 'decline']),
     message: Text(500).optional(),
   }),
-  complete_item: z.strictObject({ item_id: ItemId, resolution: z.enum(['done', 'dropped']), note: Text(500).optional() }),
+  complete_item: z.strictObject({ item_id: ItemId, resolution: z.enum(['done', 'dropped', 'skipped']), note: Text(500).optional() }),
   snooze_item: z.strictObject({
     item_id: ItemId,
     preset: z.enum(['tonight', 'tomorrow', 'weekend', 'next_week', 'custom']),

@@ -166,8 +166,9 @@ export function weeklyNotification(member: Member, env: GenEnv & { doneThisWeek:
   const nameOf = nameLookup(env.members)
   const today = localDate(now, tz)
   const done = env.doneThisWeek.filter(i => i.status === 'done')
+  // a repeating item is not stuck because it is old: each occurrence comes and goes
   const stuck = items
-    .filter(i => i.kind !== 'idea' && now.getTime() - new Date(i.createdAt).getTime() > 7 * DAY)
+    .filter(i => i.kind !== 'idea' && !i.repeat && now.getTime() - new Date(i.createdAt).getTime() > 7 * DAY)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const ideas = items.filter(i => i.kind === 'idea')
   const end = addDaysToDate(today, 7)

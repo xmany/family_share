@@ -1,7 +1,8 @@
 // Deterministic Simplified-Chinese text for event summaries, labels and notification titles/bodies.
 // Pure functions: every relative label ("今天 / 明天 / 周六 10/24") takes an explicit reference instant.
 
-import type { Item, ItemKind, ItemStatus, Member, NotificationAction, Priority } from '../../shared/types'
+import type { Item, ItemKind, ItemStatus, Member, NotificationAction, Priority, RepeatRule } from '../../shared/types'
+import { describeRepeat } from '../../shared/repeat'
 import { formatDateZh, formatInstantZh } from '../time'
 
 export const STATUS_LABEL_ZH: Record<ItemStatus, string> = {
@@ -75,6 +76,11 @@ export function nameLookup(members: readonly Member[]): NameOf {
 }
 
 const withDue = (s: string, due: string | null) => (due ? `${s}（${due}）` : s)
+/** "今天 21:00，每周日" — the due label plus how it repeats */
+const dueAndRepeat = (item: Pick<Item, 'dueAt' | 'dueDate' | 'repeat'>, ref: Date, tz: string) => {
+  const due = dueLabel(item, ref, tz)
+  return item.repeat && due ? `${due}，${describeRepeat(item.repeat)}` : due
+}
 
 // ---------------------------------------------------------------------------------------------
 // Event summaries (shown in the chat "改动" card and item history)
@@ -88,13 +94,13 @@ export interface SummaryEnv {
 /** "新建待办：买地毯（明天）" / "新建待办 → 老婆：买地毯" / "新建想法：去日本玩" */
 export function summarizeCreated(item: Item, actorMemberId: string | null, env: SummaryEnv): string {
   const toOther = item.ownerId && item.ownerId !== actorMemberId ? ` → ${env.nameOf(item.ownerId)}` : ''
-  return clip(withDue(`新建${kindLabel(item.kind)}${toOther}：${item.title}`, dueLabel(item, env.now, env.tz)), 120)
+  return clip(withDue(`新建${kindLabel(item.kind)}${toOther}：${item.title}`, dueAndRepeat(item, env.now, env.tz)), 120)
 }
 
 /** "请求 → 老婆：带孩子出去（周六 08:30）"; re-sends start with "再次请求". */
 export function summarizeRequestSent(item: Item, round: number, env: SummaryEnv): string {
   const head = round > 1 ? '再次请求' : '请求'
-  return clip(withDue(`${head} → ${env.nameOf(item.ownerId)}：${item.title}`, dueLabel(item, env.now, env.tz)), 120)
+  return clip(withDue(`${head} → ${env.nameOf(item.ownerId)}：${item.title}`, dueAndRepeat(item, env.now, env.tz)), 120)
 }
 
 /** "老婆接受了：带孩子出去" / "老婆做不了：带孩子出去（周六有事）" */
@@ -137,6 +143,28 @@ export function summarizeReminderCancelled(message: string, fireAt: Date, env: S
   return clip(`取消提醒：${message}（${formatInstantZh(fireAt, env.now, env.tz)}）`, 120)
 }
 
+/** How a repeating item moved on: completed, skipped, or (scheduler) went by without being completed. */
+export type OccurrenceMove = 'done' | 'skipped' | 'missed'
+
+/**
+ * "完成一次：倒垃圾 · 下次 周日 11/29 21:00" / "跳过一次：倒垃圾 · 下次 …" /
+ * "倒垃圾：11/22 周日 21:00 没标完成 · 下次 …" (a task the scheduler moved on) / "吃药：下次提醒 → 明天 08:00" (a reminder).
+ */
+export function summarizeOccurrenceMoved(
+  item: Pick<Item, 'kind' | 'title'>,
+  move: OccurrenceMove,
+  from: Pick<Item, 'dueAt' | 'dueDate'>,
+  to: Pick<Item, 'dueAt' | 'dueDate'>,
+  env: SummaryEnv,
+): string {
+  const next = dueLabel(to, env.now, env.tz) ?? ''
+  if (move === 'done') return clip(`完成一次：${item.title} · 下次 ${next}`, 120)
+  if (move === 'skipped') return clip(`跳过一次：${item.title} · 下次 ${next}`, 120)
+  if (item.kind === 'reminder') return clip(`${item.title}：下次提醒 → ${next}`, 120)
+  const prev = dueLabel(from, env.now, env.tz)
+  return clip(`${item.title}：${prev ? `${prev} ` : ''}没标完成 · 下次 ${next}`, 120)
+}
+
 /** "撤销：明天早上你能带孩子出去吗" */
 export function summarizeUndone(utteranceText: string, changeCount: number): string {
   const text = clip(utteranceText, 30)
@@ -151,6 +179,8 @@ export interface FieldChanges {
   kind?: ItemKind
   tags?: string[]
   parentChanged?: boolean
+  /** the rule changed: the new one, or null when it stopped repeating */
+  repeat?: { to: RepeatRule | null }
 }
 
 /** "卖旧柜子：时间 → 周日 10:00，优先级 → 高" */
@@ -163,6 +193,7 @@ export function summarizeFieldsUpdated(title: string, c: FieldChanges, env: Summ
     else if (c.due.dueDate) parts.push(`日期 → ${formatDateZh(c.due.dueDate, env.now, env.tz)}`)
     else parts.push('去掉时间')
   }
+  if (c.repeat) parts.push(c.repeat.to ? `重复 → ${describeRepeat(c.repeat.to)}` : '不再重复')
   if (c.details) parts.push(c.details.to ? '更新说明' : '清空说明')
   if (c.priority) parts.push(`优先级 → ${PRIORITY_LABEL_ZH[c.priority]}`)
   if (c.tags) parts.push(c.tags.length ? `标签 → ${c.tags.join('、')}` : '清空标签')

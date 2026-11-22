@@ -16,6 +16,12 @@
   - **请求**：请家人做的事，对方要点「接受」或「做不了」。
   - **想法**：没有日期的事，每周回顾时会再提出来。
   - **提醒**：到点提醒一下。
+- **重复的事**：「每周日晚上九点倒垃圾」「每天早上八点提醒我吃药」「每周二和周五」「工作日」「隔周」「每月15号交房租」「每年」都可以直接说，也可以在事项的「编辑」里选「重复」。重复的事只占看板上的一条：
+  - 点 **完成这次**（或通知上的「完成」），它就自动排到下一次，不会关掉。
+  - 这次不做点 **跳过这次**；以后都不做点 **以后都不做了**，或者跟助手说「以后不用倒了」。
+  - 没点完成的话：**提醒** 过了时间两小时自动排到下一次；**待办和请求** 会一直显示「已过期」，到下一次的前一天才自动排到下一次，所以下一次的提醒照样会来。
+  - 只改这一次的时间（「这周改到周一」）不影响以后；「以后改成周一」才会改规则。
+  - 还不支持「每月第一个周六」「农历每月初一」这种规则，助手会只记下一次并说明。
 - **提醒**：快到时间前提醒，每天早上推送摘要，事情放太久会提醒一下，周日晚上发本周回顾，请求没人回复会跟进。晚上 22:00–07:30 是免打扰时间，可以在设置里改。
 - **通知渠道**：
   - **App 通知**（Web Push）：主要渠道，iPhone 和安卓都能收。
@@ -351,7 +357,7 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 
 ## English summary
 
-**family_share** is a self-hosted coordination app for one family. People speak or type in Chinese, and an AI interpreter (Gemini 4 Neon via headless Antigravity CLI `agy` + local MCP tools, or the Anthropic Claude API) turns each sentence into changes on a shared board: tasks, requests (another member must accept or decline), ideas and reminders. Every change can be undone. The chat screen has two chats: 家里 (the family chat, everyone sees what you say and the assistant's reply) and 助手 (private: only you see the conversation, while the items it creates still land on the shared board and requests still notify people). A deterministic scheduler on the server sends reminders, request follow-ups, a daily digest, stale-task nudges and a Sunday weekly review. Notifications go through Web Push from the installed PWA, with an optional WeChat Official Account test account (template messages, plus texting the assistant). All data stays in `DATA_DIR`: a SQLite database and the voice recordings.
+**family_share** is a self-hosted coordination app for one family. People speak or type in Chinese, and an AI interpreter (Gemini 4 Neon via headless Antigravity CLI `agy` + local MCP tools, or the Anthropic Claude API) turns each sentence into changes on a shared board: tasks, requests (another member must accept or decline), ideas and reminders. Tasks, reminders and requests can repeat (daily, workdays, weekly on chosen days, every n weeks, monthly, yearly): a repeating item is one item that moves on to its next date when you complete or skip it, and an occurrence nobody completed moves on by itself (reminders two hours after their time; tasks and requests on the day before the next one). Every change can be undone. The chat screen has two chats: 家里 (the family chat, everyone sees what you say and the assistant's reply) and 助手 (private: only you see the conversation, while the items it creates still land on the shared board and requests still notify people). A deterministic scheduler on the server sends reminders, request follow-ups, a daily digest, stale-task nudges and a Sunday weekly review. Notifications go through Web Push from the installed PWA, with an optional WeChat Official Account test account (template messages, plus texting the assistant). All data stays in `DATA_DIR`: a SQLite database and the voice recordings.
 
 **Prerequisites:**
 - Node 24.

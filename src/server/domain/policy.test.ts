@@ -61,6 +61,7 @@ function item(over: Partial<Item> = {}): Item {
     requestedBy: null,
     dueAt: null,
     dueDate: null,
+    repeat: null,
     remindAt: null,
     snoozedUntil: null,
     snoozeCount: 0,
