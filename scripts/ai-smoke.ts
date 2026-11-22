@@ -1,13 +1,9 @@
-// One-minute live smoke test of the interpreter's request shape.
+// One-minute live smoke test of the interpreter.
 //
-//   ANTHROPIC_API_KEY=… npx tsx scripts/ai-smoke.ts
+//   AI_PROVIDER=agy npx tsx scripts/ai-smoke.ts        # headless agy + Gemini 4 Neon via MCP
+//   ANTHROPIC_API_KEY=… npx tsx scripts/ai-smoke.ts    # Anthropic Claude API
 //
-// 1. Sends the real request (frozen system + 10 strict tools + fallbacks beta) once: confirms the API
-//    accepts it (strict tool grammar compiles, effort/fallback/cache fields are valid) — a 400 here is a bug.
-// 2. Repeats the identical request: cache_read_input_tokens must be > 0.
-// 3. Sends a different utterance: the shared tools+system prefix must still be read from cache.
-// 4. Runs one full interpret() on an in-memory board and prints the reply and changes.
-// Does nothing (exit 0) when ANTHROPIC_API_KEY is not set.
+// Does nothing (exit 0) when AI is not configured.
 
 import Anthropic from '@anthropic-ai/sdk'
 import type { BetaMessage, BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
@@ -31,10 +27,40 @@ function show(label: string, res: BetaMessage): void {
   }
 }
 
+async function smokeAgy(config: ReturnType<typeof loadConfig>): Promise<void> {
+  console.log(`provider agy (${config.agy.path}), model ${config.ai.model}, effort ${config.ai.effort}\n`)
+  const t = createTestContext()
+  t.domain.createItem(t.as(t.wife), { kind: 'task', title: '卖旧柜子' })
+  const interpreter = createInterpreter({
+    config: { ...t.config, ai: config.ai, agy: config.agy },
+    domain: t.domain,
+    clock: t.clock,
+  })
+  const t0 = Date.now()
+  const res = await interpreter.interpret({
+    memberId: t.husband.id,
+    text: '我九点有个会，明天早上你能带孩子出去吗',
+    source: 'voice',
+  })
+  console.log(`1 full interpret() via agy + MCP (${((Date.now() - t0) / 1000).toFixed(1)}s)`)
+  console.log(`  status=${res.utterance.status} reply=${res.utterance.reply ?? ''}`)
+  for (const c of res.utterance.changes) console.log(`  change: ${c.summary}`)
+  const row = t.db.prepare('SELECT model, usage FROM utterances WHERE id = ?').get(res.utterance.id) as { model: string | null; usage: string }
+  const usage = JSON.parse(row.usage) as { totals?: Record<string, number>; tools?: Array<{ name: string; ok: boolean; code?: string }> }
+  console.log(`  model=${row.model ?? '-'} totals=${JSON.stringify(usage.totals ?? {})} tools=${JSON.stringify(usage.tools ?? [])}`)
+  const failed = res.utterance.status !== 'done' || res.utterance.changes.length === 0
+  console.log(failed ? '\nSMOKE FAILED' : '\nSMOKE OK')
+  if (failed) process.exitCode = 1
+}
+
 async function main(): Promise<void> {
   const config = loadConfig()
-  if (!config.anthropic.apiKey) {
-    console.log('ANTHROPIC_API_KEY is not set — skipping the live smoke test.')
+  if (config.ai.provider === 'agy') {
+    await smokeAgy(config)
+    return
+  }
+  if (config.ai.provider !== 'anthropic' || !config.anthropic.apiKey) {
+    console.log('AI is not configured (set AI_PROVIDER=agy or ANTHROPIC_API_KEY) — skipping the live smoke test.')
     return
   }
   const api = messagesApiFrom(createAnthropicClient(config))

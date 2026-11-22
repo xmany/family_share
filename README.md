@@ -1,6 +1,6 @@
 # 家庭同步 · family_share
 
-自己部署的家庭协作小工具。家里人用中文说一句话或打一行字，例如「明天早上你能带孩子出去吗？我九点有个会」，AI（Claude）会把它整理成共享看板上的事项。之后由服务器上固定的规则按时发提醒、跟进请求、推送每日摘要，不靠 AI 记事。
+自己部署的家庭协作小工具。家里人用中文说一句话或打一行字，例如「明天早上你能带孩子出去吗？我九点有个会」，AI（Gemini 4 Neon via `agy` CLI，或 Claude API）会把它整理成共享看板上的事项。之后由服务器上固定的规则按时发提醒、跟进请求、推送每日摘要，不靠 AI 记事。
 
 > English summary at the end of this file.
 
@@ -33,7 +33,7 @@
 | **Node.js 24** | `node --version` 应显示 v24.x |
 | **ffmpeg**（推荐） | 把手机录音统一转成 16 kHz WAV，iPhone 录音更稳定；用 Qwen 识别时**必须**有。macOS：`brew install ffmpeg`；Debian/Ubuntu：`sudo apt install ffmpeg` |
 | **一台一直开着的机器** | 提醒是服务器发出的。Mac 睡眠时不会发任何提醒，所以推荐 Mac mini、家里一直开着的电脑或一台小 VPS |
-| **Anthropic API key** | 让 AI 整理说的话。在 <https://console.anthropic.com> 创建 |
+| **AI（二选一）** | **Antigravity CLI（`agy`）**：本机无头运行 Gemini 4 Neon，通过本机临时 MCP 服务调用看板工具，复用 `agy` 登录即可（`AI_PROVIDER=agy`）；**或 Anthropic API key**：直接调用 Claude API（<https://console.anthropic.com>） |
 | 本机 Whisper，或 OpenAI / 阿里云百炼国际站 key（可选） | 按住说话的语音识别：本机开源 Whisper（免费，需要装了 `openai-whisper` 的 Python 和 ffmpeg），或 OpenAI `gpt-transcribe`，或 Qwen `qwen3-asr-flash`。不配也可以，手机键盘自带的语音输入照样能用 |
 | Tailscale 账号（可选，推荐） | 免费给手机提供 HTTPS 地址。通知、麦克风和「添加到主屏幕」都需要 HTTPS |
 | 微信（可选） | 用公众号「接口测试号」发微信提醒 |
@@ -53,7 +53,15 @@ cp .env.example .env
 ```ini
 PUBLIC_URL=https://your-mac.your-tailnet.ts.net   # 手机访问的地址，见下面「HTTPS」一节
 FAMILY_TIMEZONE=Australia/Sydney                 # 家庭时区，所有「明天早上」都按它理解
-ANTHROPIC_API_KEY=sk-ant-...
+
+# AI（二选一）：
+AI_PROVIDER=agy                                  # 本机 agy CLI 无头调用 Gemini 4 Neon（默认模型 gemini-4-neon）
+# AGY_PATH=/Users/you/.local/bin/agy             # launchd 找不到 agy 时填绝对路径
+# AI_MODEL=gemini-4-neon                         # 也可直接填带力度的模型名，如 gemini-4-neon-high
+# AI_EFFORT=medium                               # low | medium | high | xhigh | max
+# 或者改用 Anthropic Claude API：
+# ANTHROPIC_API_KEY=sk-ant-...
+
 # 语音（三选一，可选）：
 # STT_PROVIDER=whisper                            # 本机 Whisper，免费；再设 WHISPER_PYTHON 和 FFMPEG_PATH
 # WHISPER_PYTHON=/Users/you/.pyenv/versions/whisper_env/bin/python
@@ -283,7 +291,8 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 
 | 项目 | 价格 | 一个家庭大概 |
 |---|---|---|
-| Claude（默认 `claude-opus-5-5`） | 输入 $4、输出 $20 / 百万 token，缓存读取 $0.20 | 每句话约 $0.03–0.05（effort 越高越贵）；每天 20–40 句时每月约 **US$20–50** |
+| Gemini 4 Neon（`AI_PROVIDER=agy`） | 复用 `agy` CLI 登录额度 | 无额外 API 计费 |
+| Claude（`AI_PROVIDER=anthropic`，默认 `claude-opus-5-5`） | 输入 $4、输出 $20 / 百万 token，缓存读取 $0.20 | 每句话约 $0.03–0.05（effort 越高越贵）；每天 20–40 句时每月约 **US$20–50** |
 | 语音：本机 Whisper | 免费 | 在服务器那台电脑上跑，turbo 模型加载后约占 2–3 GB 内存，空闲 15 分钟释放 |
 | 语音：OpenAI `gpt-transcribe` | $0.0045 / 分钟 | 每月约 300 分钟，约 US$1.4 |
 | 语音：Qwen `qwen3-asr-flash`（国际站） | 约 $0.0021 / 分钟 | 每月约 US$0.6 |
@@ -302,7 +311,7 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 
 - **数据存放**：所有数据都在你自己的机器上的 `DATA_DIR` 里。`family.db` 里是事项、对话、成员和通知记录，`audio/` 里是录音（只有服务器账号能读；默认一直保留，可以设 `AUDIO_KEEP_DAYS` 定期删除，见「运行 → 录音」）。App 本身没有任何统计或埋点，除了下面列出的服务，数据不会发到别处。
 - **「助手」对话**：你在「助手」里说的话和助手的回复，其他家人在 App 里看不到（看板、实时更新、撤销都不会带出来）。它产生的事项在共享看板上，大家都能看到。这些话和其他数据一样存在 `family.db` 里，能登录这台服务器的人可以直接读数据库。从微信发给测试号的文字目前仍然显示在「家里」。
-- **Anthropic（Claude）**：会收到每句话的文字，以及当时的看板摘要（成员名字和别名、进行中的事项标题和备注、最近 8 句对话）。在「家里」说话时，摘要里只有「家里」的对话；在「助手」里说话时，还包括你自己在「助手」里说过的话，不会有别人的。
+- **AI 提供方（Google Antigravity / `agy` 或 Anthropic Claude）**：会收到每句话的文字，以及当时的看板摘要（成员名字和别名、进行中的事项标题和备注、最近 8 句对话）。在「家里」说话时，摘要里只有「家里」的对话；在「助手」里说话时，还包括你自己在「助手」里说过的话，不会有别人的。使用 `AI_PROVIDER=agy` 时，每句话在独立的临时空目录中运行，且 `PreToolUse` 钩子仅放行本机临时 MCP 服务上的 11 个看板工具，阻止读写文件和执行命令。
 - **OpenAI 或阿里云（语音识别）**：会收到录音，以及用来提高识别率的关键词（成员名字、别名和事项标题）。用本机 Whisper 时录音不出这台电脑。
 - **腾讯（微信）**：会看到模板消息的内容（每个字段大约 20 个字）、你发给测试号的文字，以及你的 openid。
 - **推送服务（Apple / Google / Mozilla）**：负责转交 App 通知。通知内容是端到端加密的，它们只看到加密数据和发送时间。
@@ -325,9 +334,9 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 | 换了地址或 VAPID 密钥后收不到通知 | 每个人在设置里重新点「开启通知」，必要时重新添加到主屏幕 |
 | 晚上没收到提醒 | 默认 22:00–07:30 免打扰，可以在设置里改。「快到时间」（提前 60 分钟）和明确设的提醒不受免打扰影响 |
 | 提醒标题带「（迟到）」或者没收到 | 服务器（或 Mac）当时在睡眠或关机。用一直开机的机器 |
-| 回复「AI 还没配置」 | `.env` 里没有 `ANTHROPIC_API_KEY`，填好后重启 |
-| 回复「AI 服务的配置有问题」 | key 或模型名不对，看服务器日志里的 `[ai] utterance … failed: auth / model_not_found` |
-| 回复「AI 的使用额度用完了」 | Anthropic 账户达到了自己设的每月消费上限，或者预付余额用完了（日志里是 `failed: spend_limit`）。到 console.anthropic.com → Settings → Limits 提高上限或充值，或者等回复里写的恢复时间。同一个账户下别的项目也会占用这个额度，可以给本 App 单独建一个 workspace 和 key |
+| 回复「AI 还没配置」 | `.env` 里没有配 `AI_PROVIDER=agy` 或 `ANTHROPIC_API_KEY`，或者启动时找不到 `agy`（设 `AGY_PATH=/Users/you/.local/bin/agy`），改好后重启 |
+| 回复「AI 服务的配置有问题」 | key、模型名不对或 `agy` 未登录，看服务器日志里的 `[ai] utterance … failed: auth / model_not_found / bad_request` |
+| 回复「AI 的使用额度用完了」 | AI 额度或消费上限用完了（日志里是 `failed: spend_limit`）。Anthropic 可到 console.anthropic.com → Settings → Limits 调整；`agy` 请等待额度恢复或切换模型 |
 | 回复「AI 现在有点忙」 | Anthropic 限流或过载，稍后再说一次；已经做好的改动会保留 |
 | 没有麦克风按钮 | 没配置语音识别（启动摘要里 `speech: off`），或者用 Qwen / Whisper 但找不到 ffmpeg（设置 `FFMPEG_PATH`，比如 `/opt/homebrew/bin/ffmpeg`），或者 `WHISPER_PYTHON` 不能 `import whisper`（启动时会打印原因）。键盘自带的语音输入照样能用 |
 | 语音提示「没听清」 | 看服务器日志里的 `[stt]` 行；运行 `npm run family -- stt-test` 单独测一下语音识别 |
@@ -342,20 +351,20 @@ Funnel 地址是公开的，但所有接口都要登录，登录只能靠邀请�
 
 ## English summary
 
-**family_share** is a self-hosted coordination app for one family. People speak or type in Chinese, and Claude turns each sentence into changes on a shared board: tasks, requests (another member must accept or decline), ideas and reminders. Every change can be undone. The chat screen has two chats: 家里 (the family chat, everyone sees what you say and the assistant's reply) and 助手 (private: only you see the conversation, while the items it creates still land on the shared board and requests still notify people). A deterministic scheduler on the server sends reminders, request follow-ups, a daily digest, stale-task nudges and a Sunday weekly review. Notifications go through Web Push from the installed PWA, with an optional WeChat Official Account test account (template messages, plus texting the assistant). All data stays in `DATA_DIR`: a SQLite database and the voice recordings.
+**family_share** is a self-hosted coordination app for one family. People speak or type in Chinese, and an AI interpreter (Gemini 4 Neon via headless Antigravity CLI `agy` + local MCP tools, or the Anthropic Claude API) turns each sentence into changes on a shared board: tasks, requests (another member must accept or decline), ideas and reminders. Every change can be undone. The chat screen has two chats: 家里 (the family chat, everyone sees what you say and the assistant's reply) and 助手 (private: only you see the conversation, while the items it creates still land on the shared board and requests still notify people). A deterministic scheduler on the server sends reminders, request follow-ups, a daily digest, stale-task nudges and a Sunday weekly review. Notifications go through Web Push from the installed PWA, with an optional WeChat Official Account test account (template messages, plus texting the assistant). All data stays in `DATA_DIR`: a SQLite database and the voice recordings.
 
 **Prerequisites:**
 - Node 24.
 - ffmpeg: recommended, and required for Qwen speech-to-text.
 - An always-on machine or VPS. A sleeping Mac sends no reminders.
-- An Anthropic API key.
+- Antigravity CLI (`agy`, authenticated) for `AI_PROVIDER=agy` (default `gemini-4-neon`), or an Anthropic API key for Claude.
 - Optional: an OpenAI key (`gpt-transcribe`) or an Alibaba Model Studio intl key (`qwen3-asr-flash`) for hold-to-talk voice.
 - Optional: Tailscale for HTTPS.
 
 **Setup:**
 ```bash
 npm install
-cp .env.example .env              # set PUBLIC_URL, FAMILY_TIMEZONE, ANTHROPIC_API_KEY (+ OPENAI_API_KEY for voice)
+cp .env.example .env              # set PUBLIC_URL, FAMILY_TIMEZONE, AI_PROVIDER=agy (or ANTHROPIC_API_KEY)
 npm run family -- init --name 我们家 --timezone Australia/Sydney
 npm run family -- vapid           # paste both keys into .env
 npm run family -- add --name 老公 --aliases 他,孩子爸

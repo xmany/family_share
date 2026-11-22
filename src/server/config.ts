@@ -18,12 +18,17 @@ const EnvSchema = z.object({
   /** Initial family timezone (stored in the DB on first run; change later in the DB/CLI) */
   FAMILY_TIMEZONE: z.string().optional(),
 
+  /** AI provider: "agy" (headless Antigravity CLI, Gemini 4 Neon via MCP), "anthropic" (Claude API), or "none".
+   *  Defaults to "anthropic" when ANTHROPIC_API_KEY is set, else "none". */
+  AI_PROVIDER: z.enum(['agy', 'anthropic', 'none']).optional(),
+  /** Path to the `agy` CLI executable when AI_PROVIDER=agy */
+  AGY_PATH: z.string().default('agy'),
   ANTHROPIC_API_KEY: z.string().optional(),
   // AI_* rather than CLAUDE_*: Claude Code sets CLAUDE_EFFORT (and may set others) in its own terminals, which would
   // silently override .env when the server is started from one.
-  AI_MODEL: z.string().default('claude-opus-5-5'),
+  AI_MODEL: z.string().optional(),
   AI_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('medium'),
-  /** Server-side refusal fallbacks (beta). On by default. */
+  /** Server-side refusal fallbacks (beta). On by default (Anthropic only). */
   AI_FALLBACKS: bool,
   /** Max model calls per utterance */
   AI_MAX_ITERATIONS: z.coerce.number().int().min(1).max(20).default(6),
@@ -79,6 +84,12 @@ export interface SttProviderConfig {
   baseUrl: string | null
 }
 
+export type AiProvider = 'agy' | 'anthropic' | 'none'
+export type AiEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export const AGY_DEFAULT_MODEL = 'gemini-4-neon'
+export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-5-5'
+
 export interface Config {
   port: number
   host: string
@@ -90,10 +101,19 @@ export interface Config {
   audioDir: string
   familyName: string
   familyTimezone: string
+  ai: {
+    provider: AiProvider
+    model: string
+    effort: AiEffort
+    maxIterations: number
+  }
+  agy: {
+    path: string
+  }
   anthropic: {
     apiKey: string | null
     model: string
-    effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+    effort: AiEffort
     fallbacks: boolean
     maxIterations: number
   }
@@ -141,6 +161,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { loadDot
 
   const vapidPublic = blank(e.VAPID_PUBLIC_KEY)
   const vapidPrivate = blank(e.VAPID_PRIVATE_KEY)
+  const anthropicKey = blank(e.ANTHROPIC_API_KEY)
+  const aiProvider: AiProvider = e.AI_PROVIDER ?? (anthropicKey ? 'anthropic' : 'none')
+  const explicitModel = blank(e.AI_MODEL)
+  const aiModel = explicitModel ?? (aiProvider === 'agy' ? AGY_DEFAULT_MODEL : ANTHROPIC_DEFAULT_MODEL)
 
   return {
     port: e.PORT,
@@ -152,9 +176,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { loadDot
     audioDir: resolve(dataDir, 'audio'),
     familyName: e.FAMILY_NAME,
     familyTimezone: tz,
+    ai: {
+      provider: aiProvider,
+      model: aiModel,
+      effort: e.AI_EFFORT,
+      maxIterations: e.AI_MAX_ITERATIONS,
+    },
+    agy: {
+      path: blank(e.AGY_PATH) ?? 'agy',
+    },
     anthropic: {
-      apiKey: blank(e.ANTHROPIC_API_KEY),
-      model: e.AI_MODEL,
+      apiKey: anthropicKey,
+      model: explicitModel ?? ANTHROPIC_DEFAULT_MODEL,
       effort: e.AI_EFFORT,
       fallbacks: e.AI_FALLBACKS ?? true,
       maxIterations: e.AI_MAX_ITERATIONS,
@@ -221,6 +254,22 @@ function sttFallback(e: z.infer<typeof EnvSchema>, blank: (v: string | undefined
 
 /** Config for tests: in-memory paths, no external services. */
 export function testConfig(overrides: Partial<Config> = {}): Config {
+  const anthropic = {
+    apiKey: null,
+    model: ANTHROPIC_DEFAULT_MODEL,
+    effort: 'medium' as AiEffort,
+    fallbacks: true,
+    maxIterations: 6,
+    ...overrides.anthropic,
+  }
+  const provider: AiProvider = overrides.ai?.provider ?? (anthropic.apiKey ? 'anthropic' : 'none')
+  const defaultModel = provider === 'agy' ? AGY_DEFAULT_MODEL : anthropic.model
+  const ai = {
+    provider,
+    model: overrides.ai?.model ?? defaultModel,
+    effort: overrides.ai?.effort ?? anthropic.effort,
+    maxIterations: overrides.ai?.maxIterations ?? anthropic.maxIterations,
+  }
   return {
     port: 0,
     host: '127.0.0.1',
@@ -231,11 +280,13 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     audioDir: '/tmp/family-share-test/audio',
     familyName: '测试家',
     familyTimezone: 'Australia/Sydney',
-    anthropic: { apiKey: null, model: 'claude-opus-5-5', effort: 'medium', fallbacks: true, maxIterations: 6 },
-    stt: { primary: null, fallback: null, ffmpegPath: 'ffmpeg', whisper: { python: 'python3', device: 'cpu', idleMs: 900_000 } },
+    agy: { path: 'agy', ...overrides.agy },
     webPush: null,
     wechat: null,
+    stt: { primary: null, fallback: null, ffmpegPath: 'ffmpeg', whisper: { python: 'python3', device: 'cpu', idleMs: 900_000 } },
     scheduler: { intervalMs: 30_000, requestFollowupMin: 120, requestNoreplyMin: 360 },
     ...overrides,
+    ai,
+    anthropic,
   }
 }

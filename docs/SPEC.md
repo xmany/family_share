@@ -173,8 +173,13 @@ See `docs/research/claude-api-brief.md` for the API brief (model, effort, fallba
   the reply lands in a template field cut after about 20 characters (§7): one sentence of at most 18 characters, key fact
   first, no opener (已请老公明天18:30买奶，待确认); clarification questions there follow the same limit with short options,
   and board questions get the count plus the one or two most urgent items (还有5件，最急：明天交水费).
-- If `ANTHROPIC_API_KEY` is missing, `enabled = false` and interpret() finishes the utterance with an error explaining that AI
-  isn't configured (manual buttons still work).
+- If `AI_PROVIDER=agy` is set, the interpreter instead runs headless `agy --print=… --output-format stream-json`
+  (default model `gemini-4-neon`) in an isolated per-utterance temp workspace wired to an ephemeral localhost
+  Streamable HTTP MCP server (`127.0.0.1:0` + per-turn Bearer token) exposing the exact same 11 tools from
+  `src/server/ai/tools.ts` (`eager: true`). A fail-closed `PreToolUse` hook allows only those 11 `family_board` MCP
+  tools and denies all built-in tools and any other MCP servers.
+- If neither `AI_PROVIDER=agy` nor `ANTHROPIC_API_KEY` is configured (or `AI_PROVIDER=none`), `enabled = false` and
+  interpret() finishes the utterance with an error explaining that AI isn't configured (manual buttons still work).
 
 ## 5. HTTP server
 

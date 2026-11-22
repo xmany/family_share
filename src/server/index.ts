@@ -2,6 +2,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { serve } from '@hono/node-server'
+import { createInterpreter } from './ai/index'
 import { buildContext, drainBackgroundWork, recoverInterruptedUtterances } from './app'
 import { loadConfig } from './config'
 import type { Config } from './config'
@@ -71,16 +72,42 @@ function checkSpeech(config: Config, ctx: AppContext): string {
   return ffmpeg ? ' · ffmpeg ok' : ` · ffmpeg not found at "${config.stt.ffmpegPath}" (recordings are sent as recorded)`
 }
 
-function summary(config: Config, ctx: AppContext, speechNote: string): string[] {
+/** Whether AGY_PATH runs (checked once at start when AI_PROVIDER=agy). */
+function agyWorks(path: string): boolean {
+  try {
+    return spawnSync(path, ['--help'], { timeout: 5000, stdio: 'ignore' }).status === 0
+  } catch {
+    return false
+  }
+}
+
+function checkAi(config: Config, ctx: AppContext): string {
+  if (config.ai.provider !== 'agy') return ''
+  if (agyWorks(config.agy.path)) return ''
+  const why = `agy CLI "${config.agy.path}" does not run (install agy or set AGY_PATH)`
+  console.warn(`  WARNING: ${why}.`)
+  console.warn('  AI is off; manual buttons on the board still work.')
+  ctx.interpreter = createInterpreter({
+    config: { ...config, ai: { ...config.ai, provider: 'none' }, anthropic: { ...config.anthropic, apiKey: null } },
+    domain: ctx.domain,
+    clock: ctx.clock,
+  })
+  return `off (${why})`
+}
+
+function summary(config: Config, ctx: AppContext, aiNote: string, speechNote: string): string[] {
   const members = ctx.domain.listMembers()
   const family = ctx.domain.getFamily()
   const on = (v: boolean) => (v ? 'on' : 'off')
   const wechat = config.wechat ? (config.wechat.token ? 'on (template messages + callback /wechat/mp)' : 'on (outbound only; set WECHAT_TOKEN for the callback)') : 'off'
+  const aiLine = ctx.interpreter.enabled
+    ? `on (${config.ai.provider} · ${config.ai.model}, effort ${config.ai.effort})`
+    : aiNote || 'off (set AI_PROVIDER=agy or ANTHROPIC_API_KEY)'
   return [
     `family_share listening on http://${config.host}:${config.port}`,
     `  public URL : ${config.publicUrl}${config.secureCookies ? '' : '  (not https: cookies are not Secure, push/mic need https on phones)'}`,
     `  family     : ${family.name} · ${family.timezone}`,
-    `  AI         : ${ctx.interpreter.enabled ? `on (${config.anthropic.model}, effort ${config.anthropic.effort})` : 'off (set ANTHROPIC_API_KEY)'}`,
+    `  AI         : ${aiLine}`,
     `  speech     : ${ctx.stt ? `on (${ctx.stt.name})${speechNote}` : speechNote || 'off (keyboard dictation only; set STT_PROVIDER=whisper, STT_API_KEY or OPENAI_API_KEY)'}`,
     `  web push   : ${on(!!config.webPush)}${config.webPush ? '' : ' (run: npm run family -- vapid)'}`,
     `  WeChat     : ${wechat}`,
@@ -93,13 +120,14 @@ function main(): void {
   const ctx = buildContext(config)
   const recovered = recoverInterruptedUtterances(ctx)
   if (recovered) console.warn(`  ${recovered} utterance(s) interrupted by the last shutdown were marked as failed`)
+  const aiNote = checkAi(config, ctx)
   const speechNote = checkSpeech(config, ctx)
   const streams = new StreamRegistry()
   const app = createApp(ctx, { streams })
 
   const serverOptions = { requestTimeout: REQUEST_TIMEOUT_MS }
   const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host, serverOptions }, () => {
-    for (const line of summary(config, ctx, speechNote)) console.log(line)
+    for (const line of summary(config, ctx, aiNote, speechNote)) console.log(line)
     if (ctx.domain.listMembers().length === 0) {
       console.warn('\n  WARNING: no family members yet. Add the first adult and open the printed invite link on their phone:')
       console.warn('      npm run family -- add --name 老公 --aliases 他,孩子爸 --role adult\n')

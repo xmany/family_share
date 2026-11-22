@@ -1,22 +1,31 @@
-// Live eval of the Claude interpreter on ~30 family utterances (src/server/ai/eval/cases.ts).
+// Live eval of the interpreter on ~30 family utterances (src/server/ai/eval/cases.ts).
 //
-//   ANTHROPIC_API_KEY=… npx tsx scripts/ai-eval.ts                 # all cases, config from env/.env
-//   npx tsx scripts/ai-eval.ts --only milk,cabinet --effort low     # a subset, another effort
-//   npx tsx scripts/ai-eval.ts --model claude-sonnet-5-5 --no-fallbacks
+//   AI_PROVIDER=agy npx tsx scripts/ai-eval.ts                     # headless agy + Gemini 4 Neon (via MCP)
+//   ANTHROPIC_API_KEY=… npx tsx scripts/ai-eval.ts                 # Anthropic Claude API
+//   npx tsx scripts/ai-eval.ts --only milk,cabinet --effort low    # a subset, another effort
+//   npx tsx scripts/ai-eval.ts --provider agy --model gemini-4-neon --effort high
 //
 // Each case runs in a fresh in-memory board (Wed 2026-10-21 12:00 Sydney, members 老公/老婆) and
-// makes real API calls. Prints pass/fail per case with the tool calls made, then the total cost.
-// Does nothing (exit 0) when ANTHROPIC_API_KEY is not set.
+// makes real model calls. Prints pass/fail per case with the tool calls made.
+// Does nothing (exit 0) when AI is not configured.
 
-import { loadConfig, type Config } from '../src/server/config'
+import { AGY_DEFAULT_MODEL, ANTHROPIC_DEFAULT_MODEL, loadConfig, type Config } from '../src/server/config'
 import { createAnthropicClient, messagesApiFrom } from '../src/server/ai/client'
 import { CASES } from '../src/server/ai/eval/cases'
-import { describeExpected, formatCall, runCase, type CaseRun } from '../src/server/ai/eval/harness'
+import { describeExpected, formatCall, runCase, runCaseWithAgy, type CaseRun } from '../src/server/ai/eval/harness'
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+const PROVIDERS = ['agy', 'anthropic'] as const
 
 function parseArgs(argv: string[]) {
-  const out: { only: string[]; model?: string; effort?: (typeof EFFORTS)[number]; fallbacks?: boolean; verbose: boolean } = { only: [], verbose: false }
+  const out: {
+    only: string[]
+    provider?: (typeof PROVIDERS)[number]
+    model?: string
+    effort?: (typeof EFFORTS)[number]
+    fallbacks?: boolean
+    verbose: boolean
+  } = { only: [], verbose: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!
     const next = () => {
@@ -25,7 +34,11 @@ function parseArgs(argv: string[]) {
       return v
     }
     if (a === '--only') out.only.push(...next().split(',').map(s => s.trim()).filter(Boolean))
-    else if (a === '--model') out.model = next()
+    else if (a === '--provider') {
+      const p = next()
+      if (!(PROVIDERS as readonly string[]).includes(p)) throw new Error(`--provider must be one of ${PROVIDERS.join(', ')}`)
+      out.provider = p as (typeof PROVIDERS)[number]
+    } else if (a === '--model') out.model = next()
     else if (a === '--effort') {
       const e = next()
       if (!(EFFORTS as readonly string[]).includes(e)) throw new Error(`--effort must be one of ${EFFORTS.join(', ')}`)
@@ -33,21 +46,20 @@ function parseArgs(argv: string[]) {
     } else if (a === '--no-fallbacks') out.fallbacks = false
     else if (a === '--verbose' || a === '-v') out.verbose = true
     else if (a === '--help' || a === '-h') {
-      console.log('usage: npx tsx scripts/ai-eval.ts [--only id,id] [--model m] [--effort e] [--no-fallbacks] [--verbose]')
+      console.log('usage: npx tsx scripts/ai-eval.ts [--provider agy|anthropic] [--only id,id] [--model m] [--effort e] [--no-fallbacks] [--verbose]')
       process.exit(0)
     } else throw new Error(`unknown argument ${a}`)
   }
   return out
 }
 
-function printRun(run: CaseRun, verbose: boolean): void {
+function printRun(run: CaseRun, verbose: boolean, provider: 'agy' | 'anthropic'): void {
   const c = run.case
   const tokens = run.usage.reduce((n, u) => n + u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens, 0)
   const cacheRead = run.usage.reduce((n, u) => n + u.cacheReadTokens, 0)
   const head = run.failures.length ? 'FAIL' : 'PASS'
-  console.log(
-    `${head} ${c.id}  (${run.usage.length} calls, ${(run.ms / 1000).toFixed(1)}s, ${tokens} tok, cache read ${cacheRead}, $${run.costUsd.toFixed(4)}${run.costEstimated ? ' est.' : ''})`,
-  )
+  const costStr = provider === 'agy' ? '' : `, $${run.costUsd.toFixed(4)}${run.costEstimated ? ' est.' : ''}`
+  console.log(`${head} ${c.id}  (${run.usage.length} calls, ${(run.ms / 1000).toFixed(1)}s, ${tokens} tok, cache read ${cacheRead}${costStr})`)
   console.log(`  ${c.speaker === 'husband' ? '老公' : '老婆'}: ${c.text}`)
   for (const call of run.calls) console.log(`  → ${formatCall(call, run.names)}`)
   console.log(`  ← [${run.status}] ${run.reply ?? ''}`)
@@ -68,30 +80,47 @@ async function main(): Promise<void> {
     console.error(e instanceof Error ? e.message : e)
     process.exit(2)
   }
-  if (!config.anthropic.apiKey) {
+  const provider = args.provider ?? (config.ai.provider === 'none' ? null : config.ai.provider)
+  if (!provider) {
+    console.log('AI is not configured (set AI_PROVIDER=agy or ANTHROPIC_API_KEY) — skipping the live interpreter eval.')
+    return
+  }
+  if (provider === 'anthropic' && !config.anthropic.apiKey) {
     console.log('ANTHROPIC_API_KEY is not set — skipping the live interpreter eval.')
     return
   }
-  const anthropic: Config['anthropic'] = {
-    ...config.anthropic,
-    ...(args.model ? { model: args.model } : {}),
-    ...(args.effort ? { effort: args.effort } : {}),
-    ...(args.fallbacks === false ? { fallbacks: false } : {}),
-  }
-  const api = messagesApiFrom(createAnthropicClient({ anthropic }))
   const cases = args.only.length ? CASES.filter(c => args.only.some(o => c.id.includes(o))) : CASES
   if (!cases.length) {
     console.log('no cases match --only')
     process.exit(2)
   }
-  console.log(`Interpreter eval: ${cases.length} cases, model ${anthropic.model}, effort ${anthropic.effort}, fallbacks ${anthropic.fallbacks ? 'default' : 'off'}\n`)
+
+  const ai: Config['ai'] = {
+    ...config.ai,
+    provider,
+    model: args.model ?? (provider === config.ai.provider ? config.ai.model : provider === 'agy' ? AGY_DEFAULT_MODEL : ANTHROPIC_DEFAULT_MODEL),
+    ...(args.effort ? { effort: args.effort } : {}),
+  }
+  const anthropic: Config['anthropic'] = {
+    ...config.anthropic,
+    model: ai.model,
+    effort: ai.effort,
+    ...(args.fallbacks === false ? { fallbacks: false } : {}),
+  }
+  const api = provider === 'anthropic' ? messagesApiFrom(createAnthropicClient({ anthropic })) : null
+
+  console.log(
+    provider === 'agy'
+      ? `Interpreter eval (agy): ${cases.length} cases, model ${ai.model}, effort ${ai.effort}, bin ${config.agy.path}\n`
+      : `Interpreter eval (anthropic): ${cases.length} cases, model ${anthropic.model}, effort ${anthropic.effort}, fallbacks ${anthropic.fallbacks ? 'default' : 'off'}\n`,
+  )
 
   const runs: CaseRun[] = []
   for (const c of cases) {
     try {
-      const run = await runCase(c, api, anthropic)
+      const run = provider === 'agy' ? await runCaseWithAgy(c, ai, config.agy) : await runCase(c, api!, anthropic)
       runs.push(run)
-      printRun(run, args.verbose)
+      printRun(run, args.verbose, provider)
     } catch (e) {
       console.log(`FAIL ${c.id}  (harness error: ${e instanceof Error ? e.message : String(e)})`)
       runs.push({ case: c, status: 'error', reply: null, calls: [], usage: [], failures: ['harness error'], costUsd: 0, costEstimated: false, ms: 0, names: new Map() })
@@ -110,7 +139,9 @@ async function main(): Promise<void> {
   console.log(
     `tokens: input ${sum(u => u.inputTokens)}, cache write ${sum(u => u.cacheWriteTokens)}, cache read ${sum(u => u.cacheReadTokens)}, output ${sum(u => u.outputTokens)}`,
   )
-  console.log(`total cost $${cost.toFixed(4)}${runs.some(r => r.costEstimated) ? ' (partly estimated)' : ''} · $${(cost / Math.max(1, runs.length)).toFixed(4)} per utterance`)
+  if (provider === 'anthropic') {
+    console.log(`total cost $${cost.toFixed(4)}${runs.some(r => r.costEstimated) ? ' (partly estimated)' : ''} · $${(cost / Math.max(1, runs.length)).toFixed(4)} per utterance`)
+  }
   if (passed < runs.length) process.exitCode = 1
 }
 
