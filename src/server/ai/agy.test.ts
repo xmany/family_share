@@ -77,14 +77,16 @@ describe('config: AI_PROVIDER=agy', () => {
 })
 
 describe('agy CLI arg builder, fail-closed settings, workspace templates and PreToolUse guard', () => {
-  it('never passes --dangerously-skip-permissions or prompt text in argv; enables --sandbox, --settings and stdin stream-json', () => {
+  it('never passes --dangerously-skip-permissions or prompt text in argv; enables --sandbox, --settings, --log-file and stdin stream-json', () => {
     const baseCfg = agyConfigFrom(testConfig({ ai: { provider: 'agy', model: 'gemini-4-neon', effort: 'high', maxIterations: 6 } }), 60_000)
-    const args = buildAgyArgs(baseCfg, '/tmp/ws/.agents/settings.json')
+    const args = buildAgyArgs(baseCfg, '/tmp/ws/.agents/settings.json', '/tmp/ws/agy.log')
     expect(args).not.toContain('--dangerously-skip-permissions')
     expect(args.some(a => a.startsWith('--print='))).toBe(false)
     expect(args).toContain('--sandbox')
     expect(args).toContain('--settings')
     expect(args).toContain('/tmp/ws/.agents/settings.json')
+    expect(args).toContain('--log-file')
+    expect(args).toContain('/tmp/ws/agy.log')
     expect(args).toContain('--input-format')
     expect(args).toContain('--output-format')
     expect(args).toContain('--agent')
@@ -100,16 +102,31 @@ describe('agy CLI arg builder, fail-closed settings, workspace templates and Pre
     const suffixed = agyConfigFrom(testConfig({ ai: { provider: 'agy', model: 'gemini-4-neon-xhigh', effort: 'medium', maxIterations: 6 } }))
     expect(hasEffortSuffix('gemini-4-neon-xhigh')).toBe(true)
     expect(hasEffortSuffix('gemini-4-neon')).toBe(false)
-    expect(buildAgyArgs(suffixed, '/tmp/s.json')).not.toContain('--effort')
+    expect(buildAgyArgs(suffixed, '/tmp/s.json', '/tmp/a.log')).not.toContain('--effort')
 
     const ndjson = renderStreamJsonInput('私聊秘密内容')
     expect(ndjson.endsWith('\n')).toBe(true)
     expect(JSON.parse(ndjson)).toEqual({ event: 'user', message: { content: '私聊秘密内容' } })
   })
 
-  it('allow-lists only our 11 family_board MCP tools in settings.json, marks them eager in mcp_config.json, and embeds SYSTEM_PROMPT', () => {
-    const settings = JSON.parse(renderAgySettings()) as { permissions: { allow: string[] } }
-    expect(settings.permissions.allow).toEqual(MCP_TOOLS.map(t => `mcp(${MCP_SERVER_NAME}/${t.name})`))
+  it('overrides global agentMode/toolPermission to fail closed, allow-lists only our 11 MCP tools, and embeds SYSTEM_PROMPT', () => {
+    const settings = JSON.parse(renderAgySettings()) as {
+      agentMode: string
+      toolPermission: string
+      enableTerminalSandbox: boolean
+      allowNonWorkspaceAccess: boolean
+      permissions: { allow: string[]; deny: string[] }
+    }
+    expect(settings).toEqual({
+      agentMode: '',
+      toolPermission: 'request-review',
+      enableTerminalSandbox: true,
+      allowNonWorkspaceAccess: false,
+      permissions: {
+        allow: MCP_TOOLS.map(t => `mcp(${MCP_SERVER_NAME}/${t.name})`),
+        deny: ['command(*)', 'read_file(*)', 'write(*)', 'web(*)'],
+      },
+    })
 
     const cfg = JSON.parse(renderMcpConfig('http://127.0.0.1:9999/mcp', 'secret')) as {
       mcpServers: Record<string, { serverUrl: string; headers: Record<string, string>; tools: Record<string, { eager: boolean }> }>
@@ -220,6 +237,37 @@ describe('conversation disk cleanup', () => {
       await rm(appData, { recursive: true, force: true })
     }
   })
+
+  it('retries asynchronously without blocking the event loop when conversation_summaries.db is briefly locked', async () => {
+    const appData = await mkdtemp(join(tmpdir(), 'family-share-appdata-lock-'))
+    const targetId = '33333333-4444-5555-6666-777777777777'
+    try {
+      const dbPath = join(appData, 'conversation_summaries.db')
+      const holder = new Database(dbPath)
+      holder.exec('CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY);')
+      holder.prepare('INSERT INTO conversation_summaries VALUES (?)').run(targetId)
+      holder.exec('BEGIN EXCLUSIVE')
+
+      let timerTicks = 0
+      const tick = setInterval(() => timerTicks++, 10)
+      setTimeout(() => holder.exec('COMMIT'), 70)
+
+      try {
+        await cleanupAgyConversation(targetId, appData)
+      } finally {
+        clearInterval(tick)
+        holder.close()
+      }
+
+      // Event loop stayed responsive while waiting for the lock to clear
+      expect(timerTicks).toBeGreaterThanOrEqual(2)
+      const check = new Database(dbPath, { readonly: true })
+      expect(check.prepare('SELECT conversation_id FROM conversation_summaries').all()).toEqual([])
+      check.close()
+    } finally {
+      await rm(appData, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('stream-json parser and error classification', () => {
@@ -289,6 +337,7 @@ describe('stream-json parser and error classification', () => {
     expect(classifyAgyError('UNAUTHENTICATED: not logged in')).toBe('auth')
     expect(classifyAgyError('unknown model "gemini-99"')).toBe('model_not_found')
     expect(classifyAgyError('DEADLINE_EXCEEDED: timed out')).toBe('timeout')
+    expect(classifyAgyError('context deadline exceeded')).toBe('timeout')
     expect(classifyAgyError('ECONNRESET')).toBe('network')
     expect(classifyAgyError('response refused by safety filter')).toBe('refusal')
 
@@ -393,7 +442,7 @@ describe('runAgyLoop + createInterpreter end to end (fake agy subprocess + real 
     }
   })
 
-  it('stops agy right after ask_clarification settles and preserves the question even if a follow-up round fails', async () => {
+  it('stops agy when the next model response starts after ask_clarification and preserves the question if a follow-up hangs', async () => {
     const t = createTestContext()
     const fakeScript = `
       const fs = require('node:fs');
@@ -415,7 +464,8 @@ describe('runAgyLoop + createInterpreter end to end (fake agy subprocess + real 
           }),
         });
         console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 2, state: 'DONE', step_type: 'tool', tool_name: 'mcp_family_board_ask_clarification' } }));
-        // Simulate a slow/hanging 2nd model round: runner should stop us promptly instead of waiting for deadline!
+        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 3, state: 'ACTIVE', step_type: 'agent_response', text_delta: '是哪一个' } }));
+        // Even if the 2nd response hangs, stopWith('clarified') stops it promptly and returns the question.
         setInterval(() => {}, 1000);
       })().catch(e => { console.error(e); process.exit(1); });
     `
@@ -437,7 +487,7 @@ describe('runAgyLoop + createInterpreter end to end (fake agy subprocess + real 
     })
   })
 
-  it('mixed ask_clarification + create_item in the same round cancels the question so the model redoes both cleanly', async () => {
+  it('mixed ask_clarification + slow sibling create_item (120 ms later) cancels the question so nothing is silently dropped', async () => {
     const t = createTestContext()
     const fakeScript = `
       const fs = require('node:fs');
@@ -451,14 +501,15 @@ describe('runAgyLoop + createInterpreter end to end (fake agy subprocess + real 
           headers: { 'Content-Type': 'application/json', ...srv.headers },
           body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }),
         }).then(r => r.json());
-        // Round 1: model emits BOTH ask_clarification and create_item in the same batch (ask arrives first!)
+        // Round 1: ask_clarification finishes first, then a slow sibling create_item arrives 120 ms later (simulating guard hook startup)
         console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 1, state: 'DONE', step_type: 'agent_response', usage: { input_tokens: 1000, output_tokens: 40 } } }));
         console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 2, state: 'ACTIVE', step_type: 'tool', tool_name: 'mcp_family_board_ask_clarification' } }));
-        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 3, state: 'ACTIVE', step_type: 'tool', tool_name: 'mcp_family_board_create_item' } }));
         await call(1, 'ask_clarification', { question: '柜子是哪一个？', options: ['卖旧柜子', '修柜门'] });
+        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 2, state: 'DONE', step_type: 'tool', tool_name: 'mcp_family_board_ask_clarification' } }));
+        await new Promise(r => setTimeout(r, 120));
+        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 3, state: 'ACTIVE', step_type: 'tool', tool_name: 'mcp_family_board_create_item' } }));
         const sib = await call(2, 'create_item', { kind: 'task', title: '交水费', explicit_assignment: false, priority: 'normal', allow_duplicate: false });
         if (!sib.result.isError) throw new Error('sibling create_item should have been rejected');
-        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 2, state: 'DONE', step_type: 'tool', tool_name: 'mcp_family_board_ask_clarification' } }));
         console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 3, state: 'DONE', step_type: 'tool', tool_name: 'mcp_family_board_create_item' } }));
         // Round 2: model sees the error and applies create_item first
         console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 4, state: 'DONE', step_type: 'agent_response', usage: { input_tokens: 1200, output_tokens: 40 } } }));
@@ -481,6 +532,73 @@ describe('runAgyLoop + createInterpreter end to end (fake agy subprocess + real 
     expect(r.utterance.status).toBe('clarify')
     expect(r.utterance.clarification).toEqual({ question: '水费记好了。柜子是哪一个？', options: ['卖旧柜子', '修柜门'] })
     expect(t.domain.listActiveItems().map(i => i.title)).toEqual(['交水费'])
+  })
+
+  it('disables the agy backend fail-closed if MCP tool calls ran without the PreToolUse guard hook firing', async () => {
+    const t = createTestContext()
+    let spawns = 0
+    const fakeScript = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      ${READ_STDIN_PROMPT}
+      (async () => {
+        await readPrompt();
+        const srv = JSON.parse(fs.readFileSync(path.join(process.cwd(), '.agents', 'mcp_config.json'), 'utf8')).mcpServers.family_board;
+        await fetch(srv.serverUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...srv.headers },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'search_items', arguments: { query: '牛奶', include_closed: true } } }),
+        });
+        console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: '没有找到。' } }));
+      })();
+    `
+    const config = testConfig({ familyTimezone: t.family.timezone, ai: { provider: 'agy', model: 'gemini-4-neon', effort: 'medium', maxIterations: 6 } })
+    const interpreter = createInterpreter({
+      config,
+      domain: t.domain,
+      clock: t.clock,
+      agyRunner: args => {
+        spawns++
+        return runAgyLoop({ ...args, verifyGuard: true, spawnImpl: fakeAgySpawn(fakeScript) })
+      },
+    })
+    expect(interpreter.enabled).toBe(true)
+    const first = await interpreter.interpret({ memberId: t.wife.id, text: '牛奶呢', source: 'text' })
+    expect(first.utterance).toMatchObject({ status: 'error', error: REPLIES.misconfigured })
+    expect(interpreter.enabled).toBe(false)
+    expect(spawns).toBe(1)
+
+    // Subsequent utterance refuses to spawn agy at all
+    const second = await interpreter.interpret({ memberId: t.wife.id, text: '明天买菜', source: 'text' })
+    expect(second.utterance).toMatchObject({ status: 'error', error: REPLIES.misconfigured })
+    expect(spawns).toBe(1)
+  })
+
+  it('does not hang forever if a grandchild process keeps stdout open after agy exits', async () => {
+    const t = createTestContext()
+    const fakeScript = `
+      const { spawn } = require('node:child_process');
+      ${READ_STDIN_PROMPT}
+      (async () => {
+        await readPrompt();
+        // Spawn a grandchild inheriting stdout/stderr that stays open for 5 s, then exit immediately
+        const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { stdio: ['ignore', 1, 2], detached: true });
+        child.unref();
+        console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: '收到。' } }));
+        process.exit(0);
+      })();
+    `
+    const config = testConfig({ familyTimezone: t.family.timezone, ai: { provider: 'agy', model: 'gemini-4-neon', effort: 'medium', maxIterations: 6 } })
+    const interpreter = createInterpreter({
+      config,
+      domain: t.domain,
+      clock: t.clock,
+      agyRunner: args => runAgyLoop({ ...args, closeGraceMs: 100, spawnImpl: fakeAgySpawn(fakeScript) }),
+    })
+    const t0 = Date.now()
+    const r = await interpreter.interpret({ memberId: t.wife.id, text: '你好', source: 'text' })
+    expect(Date.now() - t0).toBeLessThan(1500)
+    expect(r.utterance).toMatchObject({ status: 'done', reply: '收到。' })
   })
 
   it('reports retryable RESOURCE_EXHAUSTED as busy, and non-retryable quota exhaustion as agySpendLimit', async () => {

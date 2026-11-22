@@ -35,9 +35,10 @@ export const AGY_AGENT_NAME = 'family-board'
 const EFFORT_SUFFIX_RE = /-(low|medium|high|xhigh|max)$/i
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CANCEL_POLL_MS = 250
-const CLARIFY_STOP_DEBOUNCE_MS = 50
+const DEFAULT_CLOSE_GRACE_MS = 1000
 const STDERR_TAIL_MAX = 4000
 const GUARD_MARKER_NAME = '.guard_verified'
+const SQLITE_RETRY_DELAYS_MS = [50, 100, 200, 400] as const
 
 export interface AgyConfig {
   /** Path to the `agy` binary (default "agy") */
@@ -67,7 +68,7 @@ export function hasEffortSuffix(model: string): boolean {
 }
 
 /** Command-line arguments for a single non-interactive `agy` turn (prompt travels on stdin, never argv). */
-export function buildAgyArgs(cfg: AgyConfig, settingsPath: string): string[] {
+export function buildAgyArgs(cfg: AgyConfig, settingsPath: string, logFilePath: string): string[] {
   const timeoutSec = Math.max(5, Math.ceil(cfg.deadlineMs / 1000))
   return [
     '--agent',
@@ -78,6 +79,8 @@ export function buildAgyArgs(cfg: AgyConfig, settingsPath: string): string[] {
     '--sandbox',
     '--settings',
     settingsPath,
+    '--log-file',
+    logFilePath,
     '--disable-slash-commands',
     '--input-format',
     'stream-json',
@@ -93,12 +96,23 @@ export function renderStreamJsonInput(turnInput: string): string {
   return `${JSON.stringify({ event: 'user', message: { content: turnInput } })}\n`
 }
 
-/** Session-only settings allow-listing ONLY our 11 board MCP tools (everything else stays fail-closed). */
+/**
+ * Session-only settings that override global user preferences (e.g. `agentMode: "auto"`) so `agy` stays
+ * strictly fail-closed even without the PreToolUse hook: `request-review` auto-denies every shell/write/
+ * web/browser/MCP tool in headless mode except our 11 explicit `mcp(family_board/<tool>)` allow rules
+ * (`strict` would override `permissions.allow` and block our MCP tools too), `allowNonWorkspaceAccess: false`
+ * blocks reading files like `.env` outside the empty temp workspace, and `deny` blocks shell/file/web tools.
+ */
 export function renderAgySettings(): string {
   return JSON.stringify(
     {
+      agentMode: '',
+      toolPermission: 'request-review',
+      enableTerminalSandbox: true,
+      allowNonWorkspaceAccess: false,
       permissions: {
         allow: MCP_TOOLS.map(t => `mcp(${MCP_SERVER_NAME}/${t.name})`),
+        deny: ['command(*)', 'read_file(*)', 'write(*)', 'web(*)'],
       },
     },
     null,
@@ -226,10 +240,20 @@ export function defaultAgyAppDataDir(): string {
   return join(homedir(), '.gemini', 'antigravity-cli')
 }
 
+function isSqliteBusy(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  return code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED'
+}
+
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
 /**
  * Deletes the per-conversation state `agy` persists on disk (`brain/<id>`, `conversations/<id>*`,
  * `annotations/<id>*`, and rows in `conversation_summaries.db`) so disk usage does not grow with
  * every utterance and private 助手 conversations do not remain on disk.
+ *
+ * Uses `timeout: 0` with short async retries on SQLITE_BUSY so cleanup never blocks the server's
+ * event loop waiting on a lock.
  */
 export async function cleanupAgyConversation(conversationId: string | null, appDataDir: string = defaultAgyAppDataDir()): Promise<void> {
   if (!conversationId || !UUID_RE.test(conversationId)) return
@@ -248,24 +272,35 @@ export async function cleanupAgyConversation(conversationId: string | null, appD
 
   const summariesDbPath = join(appDataDir, 'conversation_summaries.db')
   if (!existsSync(summariesDbPath)) return
-  let db: Database.Database | null = null
-  try {
-    db = new Database(summariesDbPath, { fileMustExist: true, timeout: 2000 })
-    for (const table of ['conversation_summaries', 'conversations_fts', 'conversation_parents']) {
+
+  const tables = ['conversation_summaries', 'conversations_fts', 'conversation_parents'] as const
+  const remaining = new Set<string>(tables)
+  for (let attempt = 0; attempt <= SQLITE_RETRY_DELAYS_MS.length && remaining.size > 0; attempt++) {
+    if (attempt > 0) await delay(SQLITE_RETRY_DELAYS_MS[attempt - 1]!)
+    let db: Database.Database | null = null
+    let sawBusy = false
+    try {
+      db = new Database(summariesDbPath, { fileMustExist: true, timeout: 0 })
+      for (const table of [...remaining]) {
+        try {
+          db.prepare(`DELETE FROM ${table} WHERE conversation_id = ?`).run(conversationId)
+          remaining.delete(table)
+        } catch (err) {
+          if (isSqliteBusy(err)) sawBusy = true
+          else remaining.delete(table) // table may not exist in older/newer agy versions
+        }
+      }
+    } catch (err) {
+      if (isSqliteBusy(err)) sawBusy = true
+      else return
+    } finally {
       try {
-        db.prepare(`DELETE FROM ${table} WHERE conversation_id = ?`).run(conversationId)
+        db?.close()
       } catch {
-        // table may not exist in older/newer agy versions
+        // already closed
       }
     }
-  } catch {
-    // best-effort: never fail an utterance because of agy's local summary index
-  } finally {
-    try {
-      db?.close()
-    } catch {
-      // already closed
-    }
+    if (!sawBusy) break
   }
 }
 
@@ -297,6 +332,7 @@ export class AgyStreamParser {
   responseText: string | null = null
   errorText: string | null = null
   finishedReason: string | null = null
+  deniedActions: Array<{ action?: string; display_name?: string }> = []
   readonly calls: CallUsage[] = []
   private readonly deltas = new Map<number, string>()
   private readonly activeToolSteps = new Set<number>()
@@ -370,6 +406,9 @@ export class AgyStreamParser {
       if (typeof res.response === 'string') this.responseText = res.response
       if (typeof res.error === 'string' && res.error.trim()) this.errorText = res.error.trim()
       if (typeof res.finished_reason === 'string' && res.finished_reason.trim()) this.finishedReason = res.finished_reason.trim()
+      if (Array.isArray(res.denied_actions)) {
+        this.deniedActions = res.denied_actions.filter((x): x is { action?: string; display_name?: string } => !!x && typeof x === 'object')
+      }
       if (res.usage && typeof res.usage === 'object') this.totalUsage = res.usage as RawUsage
     }
     return { agentResponses: this.calls.length, activeTools: this.activeToolSteps.size }
@@ -461,7 +500,7 @@ export function classifyAgyError(detail: string, meta: { status?: string; retrya
   if (grpcStatus === 'UNAUTHENTICATED' || /unauthenticated|not logged in|please log ?in|oauth|token expired|invalid.?credential|\b401\b/.test(s)) return 'auth'
   if (grpcStatus === 'PERMISSION_DENIED' || /permission_denied|\bforbidden\b|\b403\b/.test(s)) return 'permission'
   if (/model\b[^.\n]*not found|unknown model|invalid model|unsupported model/.test(s)) return 'model_not_found'
-  if (grpcStatus === 'DEADLINE_EXCEEDED' || /deadline_exceeded|timed? ?out|\btimeout\b/.test(s)) return 'timeout'
+  if (grpcStatus === 'DEADLINE_EXCEEDED' || /deadline[_ ]exceeded|timed? ?out|\btimeout\b/.test(s)) return 'timeout'
   if (/\benoent\b|failed to construct|unknown component|flag provided but not defined|invalid flag|unknown flag|no such file or directory/.test(s)) return 'bad_request'
   if (/\brefus(?:ed|al)\b|safety (?:filter|block|policy|settings)|content policy|harmful content/.test(s)) return 'refusal'
   if (/econnrefused|econnreset|enotfound|etimedout|socket hang up|network error|connection (?:refused|reset|closed)/.test(s)) return 'network'
@@ -486,6 +525,15 @@ export interface AgyLoopArgs {
   appDataDir?: string
   /** Called with whether the PreToolUse guard marker was written during the turn (smoke/tests). */
   onGuardVerified?: (verified: boolean, toolCallCount: number) => void
+  /**
+   * Whether to fail closed if MCP tool calls ran without the PreToolUse guard hook writing its marker.
+   * Defaults to true in production (`!spawnImpl`), false when a fake `spawnImpl` is injected in tests.
+   */
+  verifyGuard?: boolean
+  /** Called when the guard check fails so the interpreter can disable the agy backend. */
+  onGuardFailed?: () => void
+  /** Max time to wait for stdio 'close' after child 'exit' (guards against leaked grandchildren holding fds open). */
+  closeGraceMs?: number
   /** Tests: inject a fake agy subprocess */
   spawnImpl?: AgySpawnImpl
   /** Tests: inject a fake MCP server handle instead of binding a real socket */
@@ -515,6 +563,7 @@ function killChild(proc: AgyChildProcess): void {
 interface PreparedWorkspace {
   workdir: string
   settingsPath: string
+  logFilePath: string
   markerPath: string
 }
 
@@ -525,6 +574,7 @@ async function prepareWorkspace(mcpUrl: string, mcpToken: string): Promise<Prepa
   await mkdir(join(agentsDir, 'agents'), { recursive: true })
   const guardPath = join(agentsDir, 'guard.mjs')
   const settingsPath = join(agentsDir, 'settings.json')
+  const logFilePath = join(workdir, 'agy.log')
   const markerPath = join(workdir, GUARD_MARKER_NAME)
   await Promise.all([
     writeFile(join(agentsDir, 'mcp_config.json'), renderMcpConfig(mcpUrl, mcpToken), { mode: 0o600 }),
@@ -533,7 +583,7 @@ async function prepareWorkspace(mcpUrl: string, mcpToken: string): Promise<Prepa
     writeFile(guardPath, renderGuardHookScript(markerPath), { mode: 0o700 }),
     writeFile(join(agentsDir, 'hooks.json'), renderHooksConfig(process.execPath, guardPath), { mode: 0o600 }),
   ])
-  return { workdir, settingsPath, markerPath }
+  return { workdir, settingsPath, logFilePath, markerPath }
 }
 
 /** Runs one utterance through headless `agy` + ephemeral localhost MCP server. */
@@ -552,11 +602,6 @@ export async function runAgyLoop(a: AgyLoopArgs): Promise<LoopResult> {
   let proc: AgyChildProcess | null = null
   let mcp: McpServerHandle | null = null
   let stopReason: 'cancelled' | 'aborted' | 'iteration_cap' | 'clarified' | null = null
-  let clarifyStopTimer: NodeJS.Timeout | null = null
-  const clearClarifyTimer = () => {
-    if (clarifyStopTimer) clearTimeout(clarifyStopTimer)
-    clarifyStopTimer = null
-  }
 
   const session = createMcpTurnSession({
     execute: a.execute,
@@ -569,8 +614,7 @@ export async function runAgyLoop(a: AgyLoopArgs): Promise<LoopResult> {
 
   function stopWith(reason: 'cancelled' | 'aborted' | 'iteration_cap' | 'clarified') {
     if (!stopReason) stopReason = reason
-    clearClarifyTimer()
-    // Fence the MCP session IMMEDIATELY so nothing can mutate the board during the 2 s shutdown window.
+    // Fence the MCP session IMMEDIATELY so nothing can mutate the board during shutdown.
     session.close(reason)
     if (mcp) void mcp.close().catch(() => undefined)
     if (proc) killChild(proc)
@@ -579,12 +623,13 @@ export async function runAgyLoop(a: AgyLoopArgs): Promise<LoopResult> {
   mcp = await (a.startMcp ?? startMcpServer)(session)
   let ws: PreparedWorkspace | null = null
   let cancelTimer: NodeJS.Timeout | null = null
+  let closeGraceTimer: NodeJS.Timeout | null = null
   let conversationId: string | null = null
   const onAbort = () => stopWith('aborted')
 
   try {
     ws = await prepareWorkspace(mcp.url, mcp.token)
-    const args = buildAgyArgs(a.cfg, ws.settingsPath)
+    const args = buildAgyArgs(a.cfg, ws.settingsPath, ws.logFilePath)
     const spawnFn: AgySpawnImpl = a.spawnImpl ?? ((cmd, argv, opts) => spawn(cmd, argv, opts))
     const parser = new AgyStreamParser(a.cfg.model)
 
@@ -643,22 +688,10 @@ export async function runAgyLoop(a: AgyLoopArgs): Promise<LoopResult> {
         }
       }
 
-      // If a clarification question was recorded cleanly and all tool steps in this round have settled:
-      // stop agy promptly instead of paying for (or failing on) an extra model turn. If a sibling tool
-      // arrives in the same batch, the 50 ms debounce cancels and mcp.ts handles the sibling check first.
-      if (session.clarification) {
-        if (info.stepType === 'agent_response' && info.stepState === 'ACTIVE') {
-          stopWith('clarified')
-        } else if (info.stepType === 'tool' && info.stepState === 'ACTIVE') {
-          clearClarifyTimer()
-        } else if (info.stepType === 'tool' && info.stepState === 'DONE' && info.activeTools === 0 && !clarifyStopTimer) {
-          clarifyStopTimer = setTimeout(() => {
-            if (session.clarification && !session.cancelled && !stopReason) stopWith('clarified')
-          }, CLARIFY_STOP_DEBOUNCE_MS)
-          clarifyStopTimer.unref()
-        }
-      } else {
-        clearClarifyTimer()
+      // Stop agy only once the NEXT model response begins after a clean ask_clarification (never on a timer
+      // after the tool step, which could race a slow sibling tool whose guard hook is still starting).
+      if (session.clarification && info.stepType === 'agent_response' && info.stepState === 'ACTIVE') {
+        stopWith('clarified')
       }
     }
 
@@ -678,28 +711,42 @@ export async function runAgyLoop(a: AgyLoopArgs): Promise<LoopResult> {
       stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_MAX)
     })
 
-    // Wait for 'close' (not 'exit') so stdout/stderr flush completely before we read the final line.
+    // Wait for 'close' so stdout/stderr flush completely, bounded by closeGraceMs after 'exit' so a
+    // grandchild holding stdout/stderr open can never leave an utterance stuck on 处理中… forever.
+    const closeGraceMs = a.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS
     const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
       let settled = false
       const done = (r: { code: number | null; signal: NodeJS.Signals | null }) => {
         if (settled) return
         settled = true
+        if (closeGraceTimer) clearTimeout(closeGraceTimer)
+        closeGraceTimer = null
         resolve(r)
       }
       child.once('error', err => {
         spawnErr = err
         done({ code: null, signal: null })
       })
+      child.once('exit', (code, signal) => {
+        closeGraceTimer = setTimeout(() => {
+          child.stdout.destroy()
+          child.stderr.destroy()
+          done({ code, signal })
+        }, closeGraceMs)
+        closeGraceTimer.unref()
+      })
       child.once('close', (code, signal) => done({ code, signal }))
     })
 
     if (stdoutBuf.trim()) handleLine(stdoutBuf.trim())
-    clearClarifyTimer()
 
     const guardVerified = existsSync(ws.markerPath)
     a.onGuardVerified?.(guardVerified, session.toolCalls.length)
-    if (!a.spawnImpl && session.toolCalls.length > 0 && !guardVerified) {
-      console.warn('[ai] WARNING: agy PreToolUse guard hook marker was not written despite MCP tool calls')
+    const shouldVerifyGuard = a.verifyGuard ?? !a.spawnImpl
+    if (shouldVerifyGuard && session.toolCalls.length > 0 && !guardVerified) {
+      console.error('[ai] CRITICAL: agy PreToolUse guard hook did not fire during MCP tool execution; disabling agy backend')
+      a.onGuardFailed?.()
+      return fail('bad_request', 'PreToolUse guard hook did not run', parser.usageList(), session.toolCalls)
     }
 
     const usage = parser.usageList()
@@ -709,7 +756,7 @@ export async function runAgyLoop(a: AgyLoopArgs): Promise<LoopResult> {
       return fail('cancelled', undefined, usage, toolCalls)
     }
     // Never discard a cleanly recorded clarification question even if a follow-up model turn errored/timed out
-    // or we intentionally stopped agy right after recording it.
+    // or we intentionally stopped agy when the next model response began.
     if (session.clarification) {
       return { status: 'clarify', clarification: session.clarification, usage, toolCalls }
     }
@@ -726,14 +773,19 @@ export async function runAgyLoop(a: AgyLoopArgs): Promise<LoopResult> {
     }
 
     if (parser.status === 'SUCCESS' || (parser.status === null && exit.code === 0)) {
-      return { status: 'done', reply: parser.finalReply(), usage, toolCalls }
+      const reply = parser.finalReply()
+      if (!reply && parser.deniedActions.some(d => d.action === 'mcp')) {
+        const names = parser.deniedActions.map(d => d.display_name ?? d.action ?? 'tool').join(', ')
+        return fail('permission', `agy denied MCP tool permission (${names})`, usage, toolCalls)
+      }
+      return { status: 'done', reply, usage, toolCalls }
     }
 
     const stderrErr = extractAgyStderrError(stderrTail)
     const detail = parser.errorText ?? stderrErr?.message ?? `agy exited with ${exit.signal ?? exit.code ?? 'unknown error'}`
     return fail(classifyAgyError(detail, { status: stderrErr?.status, retryable: stderrErr?.retryable }), detail, usage, toolCalls)
   } finally {
-    clearClarifyTimer()
+    if (closeGraceTimer) clearTimeout(closeGraceTimer)
     if (cancelTimer) clearInterval(cancelTimer)
     a.signal?.removeEventListener('abort', onAbort)
     session.close('finished')

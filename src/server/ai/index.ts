@@ -145,6 +145,7 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
   const anthropicCfg = loopConfigFrom(config)
   const agyCfg = agyConfigFrom(config, deadlineMs)
 
+  let agyGuardTripped = false
   let backend: Backend | null = null
   if (deps.agyRunner) {
     backend = { kind: 'agy', run: deps.agyRunner, requestedModel: agyCfg.model, effort: agyCfg.effort }
@@ -188,10 +189,12 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
     const { utterance, replyTo } = startUtterance(input)
     const id = utterance.id
 
-    if (!backend) {
+    if (!backend || agyGuardTripped) {
       const speaker = domain.getMember(input.memberId)
-      const disabled = speaker ? toSpeakerScript(REPLIES.disabled, speaker) : REPLIES.disabled
-      domain.finishUtterance(id, { status: 'error', reply: disabled, error: disabled, model: null, usage: { error: { code: 'ai_disabled' } } })
+      const base = agyGuardTripped ? REPLIES.misconfigured : REPLIES.disabled
+      const msg = speaker ? toSpeakerScript(base, speaker) : base
+      const code = agyGuardTripped ? 'guard_disabled' : 'ai_disabled'
+      domain.finishUtterance(id, { status: 'error', reply: msg, error: msg, model: null, usage: { error: { code } } })
       return respond(id, [])
     }
 
@@ -229,7 +232,16 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
       const isCancelled = () => domain.getUtterance(id)?.status === 'undone'
       result =
         backend.kind === 'agy'
-          ? await backend.run({ cfg: agyCfg, turnInput, execute, isCancelled, signal: deadline.signal })
+          ? await backend.run({
+              cfg: agyCfg,
+              turnInput,
+              execute,
+              isCancelled,
+              signal: deadline.signal,
+              onGuardFailed: () => {
+                agyGuardTripped = true
+              },
+            })
           : await runLoop({ api: backend.api, cfg: anthropicCfg, turnInput, execute, isCancelled, signal: deadline.signal })
     } catch (e) {
       // A bug in snapshot building or the loop: the utterance must still finish (never stuck on "processing").
@@ -287,5 +299,10 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
     return respond(id, touched)
   }
 
-  return { enabled: backend !== null, interpret }
+  return {
+    get enabled() {
+      return backend !== null && !agyGuardTripped
+    },
+    interpret,
+  }
 }

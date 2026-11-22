@@ -5,8 +5,9 @@
 //
 // Does nothing (exit 0) when AI is not configured.
 
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import Anthropic from '@anthropic-ai/sdk'
 import type { BetaMessage, BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import { loadConfig } from '../src/server/config'
@@ -31,6 +32,9 @@ function show(label: string, res: BetaMessage): void {
 
 async function smokeAgy(config: ReturnType<typeof loadConfig>): Promise<void> {
   console.log(`provider agy (${config.agy.path}), model ${config.ai.model}, effort ${config.ai.effort}\n`)
+  const appData = defaultAgyAppDataDir()
+  const logDir = join(appData, 'log')
+  const logsBefore = new Set(existsSync(logDir) ? readdirSync(logDir) : [])
   const t = createTestContext()
   t.domain.createItem(t.as(t.wife), { kind: 'task', title: '卖旧柜子' })
   let guardVerified = false
@@ -66,13 +70,28 @@ async function smokeAgy(config: ReturnType<typeof loadConfig>): Promise<void> {
   console.log(`  model=${row.model ?? '-'} totals=${JSON.stringify(usage.totals ?? {})} tools=${JSON.stringify(usage.tools ?? [])}`)
   console.log(`  PreToolUse guard verified: ${guardVerified} (${guardToolCalls} MCP tool call(s))`)
 
-  let cleaned = true
-  if (conversationId) {
-    const appData = defaultAgyAppDataDir()
+  let cleaned = false
+  if (!conversationId) {
+    console.log('  conversation cleanup: FAIL (no conversation_id observed)')
+  } else {
     const brainLeft = existsSync(join(appData, 'brain', conversationId))
     const convLeft = existsSync(join(appData, 'conversations', `${conversationId}.db`))
-    cleaned = !brainLeft && !convLeft
-    console.log(`  conversation cleanup (${conversationId}): ${cleaned ? 'ok' : `LEAKED (brain=${brainLeft}, conv=${convLeft})`}`)
+    let summaryLeft = false
+    const summariesPath = join(appData, 'conversation_summaries.db')
+    if (existsSync(summariesPath)) {
+      const sdb = new Database(summariesPath, { readonly: true })
+      try {
+        const hit = sdb.prepare('SELECT 1 FROM conversation_summaries WHERE conversation_id = ?').get(conversationId)
+        summaryLeft = !!hit
+      } finally {
+        sdb.close()
+      }
+    }
+    const newLogs = (existsSync(logDir) ? readdirSync(logDir) : []).filter(f => !logsBefore.has(f))
+    cleaned = !brainLeft && !convLeft && !summaryLeft && newLogs.length === 0
+    console.log(
+      `  conversation cleanup (${conversationId}): ${cleaned ? 'ok' : `LEAKED (brain=${brainLeft}, conv=${convLeft}, summary=${summaryLeft}, newLogs=${newLogs.length})`}`,
+    )
   }
 
   const failed = res.utterance.status !== 'done' || res.utterance.changes.length === 0 || !guardVerified || !cleaned
