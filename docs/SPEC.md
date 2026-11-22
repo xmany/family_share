@@ -179,12 +179,13 @@ See `docs/research/claude-api-brief.md` for the API brief (model, effort, fallba
   ephemeral localhost Streamable HTTP MCP server (`127.0.0.1:0` + per-turn Bearer token) exposing the exact same 11
   tools from `src/server/ai/tools.ts` (`eager: true`). Without `--dangerously-skip-permissions`, session `--settings`
   sets `agentMode: ""`, `toolPermission: "request-review"`, `enableTerminalSandbox: true`, `allowNonWorkspaceAccess:
-  false`, explicitly denies `command(*)`/`read_file(*)`/`write(*)`/`web(*)`, and allows only those 11
-  `mcp(family_board/<tool>)` permissions, while a fail-closed `PreToolUse` hook denies all other tools (including
-  read-only tools and global MCP servers); if MCP tool calls ever execute without the guard hook marker, the
-  interpreter disables the `agy` backend fail-closed. After each turn, `agy`'s persisted conversation files under
-  `~/.gemini/antigravity-cli/` (brain, conversations, annotations, and `conversation_summaries.db` rows) are deleted
-  non-blockingly.
+  false`, explicitly denies `command(*)`/`read_file(*)`/`write_file(*)`/`read_url(*)`/`execute_url(*)`, and allows
+  only those 11 `mcp(family_board/<tool>)` permissions; the custom agent frontmatter sets `tools: [read_file]` so
+  `search_web` and all other built-in tools are not declared to the model at all (and `read_file` itself is denied).
+  A fail-closed `PreToolUse` hook denies everything except the 11 `family_board` MCP tools; if any tool step executes
+  without the guard hook marker, the interpreter disables the `agy` backend fail-closed. After each turn, `agy`'s
+  persisted conversation files under `~/.gemini/antigravity-cli/` (brain, conversations, annotations, and
+  `conversation_summaries.db` rows) are deleted non-blockingly.
 - If neither `AI_PROVIDER=agy` nor `ANTHROPIC_API_KEY` is configured (or `AI_PROVIDER=none`), `enabled = false` and
   interpret() finishes the utterance with an error explaining that AI isn't configured (manual buttons still work).
 

@@ -124,7 +124,7 @@ describe('agy CLI arg builder, fail-closed settings, workspace templates and Pre
       allowNonWorkspaceAccess: false,
       permissions: {
         allow: MCP_TOOLS.map(t => `mcp(${MCP_SERVER_NAME}/${t.name})`),
-        deny: ['command(*)', 'read_file(*)', 'write(*)', 'web(*)'],
+        deny: ['command(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)'],
       },
     })
 
@@ -139,6 +139,7 @@ describe('agy CLI arg builder, fail-closed settings, workspace templates and Pre
 
     const md = renderAgentMarkdown()
     expect(md).toContain(`name: ${AGY_AGENT_NAME}`)
+    expect(md).toContain('tools:\n  - read_file\n')
     expect(md).toContain(SYSTEM_PROMPT)
   })
 
@@ -572,6 +573,51 @@ describe('runAgyLoop + createInterpreter end to end (fake agy subprocess + real 
     const second = await interpreter.interpret({ memberId: t.wife.id, text: '明天买菜', source: 'text' })
     expect(second.utterance).toMatchObject({ status: 'error', error: REPLIES.misconfigured })
     expect(spawns).toBe(1)
+  })
+
+  it('also trips the guard disable latch when a non-board tool step runs with 0 board MCP calls (while tool-free turns still pass)', async () => {
+    const t = createTestContext()
+    const config = testConfig({ familyTimezone: t.family.timezone, ai: { provider: 'agy', model: 'gemini-4-neon', effort: 'medium', maxIterations: 6 } })
+
+    // 1. Genuinely tool-free turn (e.g. small talk / board question from snapshot): no tool steps, verifyGuard passes
+    const noToolScript = `
+      ${READ_STDIN_PROMPT}
+      (async () => {
+        await readPrompt();
+        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 1, state: 'DONE', step_type: 'agent_response', usage: { input_tokens: 1000, output_tokens: 20 } } }));
+        console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: '明天没有安排。' } }));
+      })();
+    `
+    const okInterp = createInterpreter({
+      config,
+      domain: t.domain,
+      clock: t.clock,
+      agyRunner: args => runAgyLoop({ ...args, verifyGuard: true, spawnImpl: fakeAgySpawn(noToolScript) }),
+    })
+    const okRes = await okInterp.interpret({ memberId: t.wife.id, text: '明天有什么事？', source: 'text' })
+    expect(okRes.utterance).toMatchObject({ status: 'done', reply: '明天没有安排。' })
+    expect(okInterp.enabled).toBe(true)
+
+    // 2. Non-board tool step (e.g. search_web) with 0 board MCP calls and no guard marker -> MUST trip latch!
+    const rogueToolScript = `
+      ${READ_STDIN_PROMPT}
+      (async () => {
+        await readPrompt();
+        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 1, state: 'DONE', step_type: 'agent_response', usage: { input_tokens: 1000, output_tokens: 20 } } }));
+        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 2, state: 'ACTIVE', step_type: 'tool', tool_name: 'search_web' } }));
+        console.log(JSON.stringify({ event: 'step_update', step_update: { step_index: 2, state: 'DONE', step_type: 'tool', tool_name: 'search_web' } }));
+        console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: '查好了。' } }));
+      })();
+    `
+    const rogueInterp = createInterpreter({
+      config,
+      domain: t.domain,
+      clock: t.clock,
+      agyRunner: args => runAgyLoop({ ...args, verifyGuard: true, spawnImpl: fakeAgySpawn(rogueToolScript) }),
+    })
+    const badRes = await rogueInterp.interpret({ memberId: t.wife.id, text: '搜一下', source: 'text' })
+    expect(badRes.utterance).toMatchObject({ status: 'error', error: REPLIES.misconfigured })
+    expect(rogueInterp.enabled).toBe(false)
   })
 
   it('does not hang forever if a grandchild process keeps stdout open after agy exits', async () => {

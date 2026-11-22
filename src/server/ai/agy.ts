@@ -112,7 +112,7 @@ export function renderAgySettings(): string {
       allowNonWorkspaceAccess: false,
       permissions: {
         allow: MCP_TOOLS.map(t => `mcp(${MCP_SERVER_NAME}/${t.name})`),
-        deny: ['command(*)', 'read_file(*)', 'write(*)', 'web(*)'],
+        deny: ['command(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)'],
       },
     },
     null,
@@ -120,12 +120,19 @@ export function renderAgySettings(): string {
   )
 }
 
-/** Custom agent definition carrying SYSTEM_PROMPT plus MCP tool-name guidance. */
+/**
+ * Custom agent definition carrying SYSTEM_PROMPT plus MCP tool-name guidance.
+ * Declaring `tools: [read_file]` strips every other built-in tool (including `search_web`, which is not
+ * gated by `permissions.deny`, plus `run_command`, `write_file`, `browser_*`, etc.) while keeping our
+ * `family_board` MCP tools attached; `read_file` itself is hard-denied by `permissions.deny` and the hook.
+ */
 export function renderAgentMarkdown(): string {
   return [
     '---',
     `name: ${AGY_AGENT_NAME}`,
     'description: 家庭助手 — family_share shared board interpreter',
+    'tools:',
+    '  - read_file',
     'mainAgent: true',
     '---',
     '',
@@ -336,11 +343,17 @@ export class AgyStreamParser {
   readonly calls: CallUsage[] = []
   private readonly deltas = new Map<number, string>()
   private readonly activeToolSteps = new Set<number>()
+  private readonly seenToolSteps = new Set<number>()
   private lastResponseStepIndex = -1
   private totalUsage: RawUsage | null = null
 
   constructor(requestedModel: string) {
     this.model = requestedModel
+  }
+
+  /** Total distinct tool steps observed in the stream (board MCP tools or any other tool). */
+  get toolStepCount(): number {
+    return this.seenToolSteps.size
   }
 
   feedLine(line: string): StreamEventInfo {
@@ -365,6 +378,7 @@ export class AgyStreamParser {
       const idx = typeof su.step_index === 'number' ? su.step_index : this.lastResponseStepIndex + 1
 
       if (su.step_type === 'tool') {
+        this.seenToolSteps.add(idx)
         if (state === 'ACTIVE') this.activeToolSteps.add(idx)
         else if (state === 'DONE' || state === 'ERROR') this.activeToolSteps.delete(idx)
         let toolName = typeof su.tool_name === 'string' ? su.tool_name : undefined
@@ -741,10 +755,11 @@ export async function runAgyLoop(a: AgyLoopArgs): Promise<LoopResult> {
     if (stdoutBuf.trim()) handleLine(stdoutBuf.trim())
 
     const guardVerified = existsSync(ws.markerPath)
-    a.onGuardVerified?.(guardVerified, session.toolCalls.length)
+    const observedToolCount = Math.max(session.toolCalls.length, parser.toolStepCount)
+    a.onGuardVerified?.(guardVerified, observedToolCount)
     const shouldVerifyGuard = a.verifyGuard ?? !a.spawnImpl
-    if (shouldVerifyGuard && session.toolCalls.length > 0 && !guardVerified) {
-      console.error('[ai] CRITICAL: agy PreToolUse guard hook did not fire during MCP tool execution; disabling agy backend')
+    if (shouldVerifyGuard && observedToolCount > 0 && !guardVerified) {
+      console.error('[ai] CRITICAL: agy PreToolUse guard hook did not fire during tool execution; disabling agy backend')
       a.onGuardFailed?.()
       return fail('bad_request', 'PreToolUse guard hook did not run', parser.usageList(), session.toolCalls)
     }
