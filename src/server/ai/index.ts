@@ -1,8 +1,12 @@
-// The Claude interpreter: one utterance in → board changes + a short reply out.
-// See docs/SPEC.md §4 and docs/research/claude-api-brief.md.
+// The interpreter: one utterance in → board changes + a short reply out.
+// Supports two backends:
+//   - "agy": headless Antigravity CLI (Gemini 4 Neon) with native MCP tool calls (./agy.ts + ./mcp.ts)
+//   - "anthropic": direct Anthropic Messages API (Claude, ./loop.ts + ./client.ts)
+// See docs/SPEC.md §4.
 //
-//   const interpreter = createInterpreter({ config, domain, clock })            // production
-//   const interpreter = createInterpreter({ config, domain, clock, api: fake })  // tests (enabled even without a key)
+//   const interpreter = createInterpreter({ config, domain, clock })                 // production
+//   const interpreter = createInterpreter({ config, domain, clock, api: fake })      // Anthropic tests
+//   const interpreter = createInterpreter({ config, domain, clock, agyRunner: fake }) // agy tests
 //   await interpreter.interpret({ memberId, text, source: 'text' })
 
 import type { UtteranceResponse } from '../../shared/api'
@@ -12,12 +16,17 @@ import type { Domain } from '../domain/types'
 import { DomainError } from '../domain/types'
 import { type Clock, formatInstantZh } from '../time'
 import type { InterpretInput, Interpreter } from './types'
+import { agyConfigFrom, runAgyLoop, type AgyRunner } from './agy'
 import { createAnthropicClient, messagesApiFrom } from './client'
 import { executeCall, type ExecContext } from './executor'
 import { type CallUsage, type LoopErrorCode, type LoopResult, type MessagesApi, loopConfigFrom, runLoop, spendLimitResetAt } from './loop'
 import { toSpeakerScript } from './script'
 import { gatherSnapshot, renderTurnInput } from './snapshot'
 
+export type { AgyConfig, AgyLoopArgs, AgyRunner, AgySpawnImpl } from './agy'
+export { AGY_AGENT_NAME, AGY_DEFAULT_MODEL, AgyStreamParser, agyConfigFrom, buildAgyArgs, classifyAgyError, cleanupAgyConversation, defaultAgyAppDataDir, extractAgyStderrError, hasEffortSuffix, renderAgentMarkdown, renderAgySettings, renderGuardHookScript, renderHooksConfig, renderMcpConfig, renderStreamJsonInput, runAgyLoop } from './agy'
+export type { McpRpcResponse, McpServerHandle, McpToolDefinition, McpTurnSession } from './mcp'
+export { MCP_PATH, MCP_PROTOCOL_VERSION, MCP_SERVER_NAME, MCP_TOOLS, createMcpTurnSession, handleMcpJsonRpc, startMcpServer } from './mcp'
 export type { MessagesApi } from './loop'
 export type { InterpretInput, Interpreter } from './types'
 export { createAnthropicClient, messagesApiFrom } from './client'
@@ -33,8 +42,12 @@ export interface InterpreterDeps {
   config: Config
   domain: Domain
   clock: Clock
-  /** Injected Messages API (tests, eval). When omitted, a real client is built if config.anthropic.apiKey is set. */
+  /** Injected Anthropic Messages API (tests, eval). Forces the Anthropic backend when provided. */
   api?: MessagesApi
+  /** Injected agy runner (tests, eval). Forces the agy backend when provided. */
+  agyRunner?: AgyRunner
+  /** Optional observer invoked with the raw LoopResult (used by eval harness). */
+  onTurnResult?: (result: LoopResult) => void
   /** Overall budget for one utterance, all model calls included (default INTERPRET_DEADLINE_MS) */
   deadlineMs?: number
 }
@@ -55,6 +68,7 @@ export const REPLIES = {
   busy: 'AI 现在有点忙，请过一会儿再说一次。',
   misconfigured: 'AI 服务的配置有问题（请检查服务器设置）。可以先用看板上的按钮。',
   spendLimit: 'AI 的使用额度用完了（要在 Anthropic 后台提高上限或充值）。可以先用看板上的按钮。',
+  agySpendLimit: 'AI 的使用额度用完了，请稍后再试。可以先用看板上的按钮。',
   /** {when} is the reset time in the family's timezone, e.g. 「12/1 周二 13:00」 */
   spendLimitUntil: 'AI 的使用额度用完了，{when} 自动恢复。可以先用看板上的按钮。',
   tooComplex: '这句有点复杂，我只做了一部分，请把剩下的分开再说一下。',
@@ -64,7 +78,13 @@ export const REPLIES = {
 } as const
 
 /** `when` formats the reset time a spend-limit error names, for the speaker (family timezone). */
-function errorReply(code: LoopErrorCode, changes: Change[], when: (at: Date) => string, detail?: string): string {
+function errorReply(
+  code: LoopErrorCode,
+  changes: Change[],
+  when: (at: Date) => string,
+  detail?: string,
+  provider: 'agy' | 'anthropic' = 'anthropic',
+): string {
   let base: string
   switch (code) {
     case 'cancelled':
@@ -90,7 +110,7 @@ function errorReply(code: LoopErrorCode, changes: Change[], when: (at: Date) => 
       break
     case 'spend_limit': {
       const at = spendLimitResetAt(detail)
-      base = at ? REPLIES.spendLimitUntil.replace('{when}', when(at)) : REPLIES.spendLimit
+      base = at ? REPLIES.spendLimitUntil.replace('{when}', when(at)) : provider === 'agy' ? REPLIES.agySpendLimit : REPLIES.spendLimit
       break
     }
     default:
@@ -115,10 +135,32 @@ function totals(calls: CallUsage[]) {
   )
 }
 
+type Backend =
+  | { kind: 'agy'; run: AgyRunner; requestedModel: string; effort: Config['ai']['effort'] }
+  | { kind: 'anthropic'; api: MessagesApi; requestedModel: string; effort: Config['anthropic']['effort'] }
+
 export function createInterpreter(deps: InterpreterDeps): Interpreter {
   const { config, domain, clock } = deps
-  const api: MessagesApi | null = deps.api ?? (config.anthropic.apiKey ? messagesApiFrom(createAnthropicClient(config)) : null)
-  const cfg = loopConfigFrom(config)
+  const deadlineMs = deps.deadlineMs ?? INTERPRET_DEADLINE_MS
+  const anthropicCfg = loopConfigFrom(config)
+  const agyCfg = agyConfigFrom(config, deadlineMs)
+
+  let agyGuardTripped = false
+  let backend: Backend | null = null
+  if (deps.agyRunner) {
+    backend = { kind: 'agy', run: deps.agyRunner, requestedModel: agyCfg.model, effort: agyCfg.effort }
+  } else if (deps.api) {
+    backend = { kind: 'anthropic', api: deps.api, requestedModel: anthropicCfg.model, effort: anthropicCfg.effort }
+  } else if (config.ai.provider === 'agy') {
+    backend = { kind: 'agy', run: runAgyLoop, requestedModel: agyCfg.model, effort: agyCfg.effort }
+  } else if (config.ai.provider === 'anthropic' && config.anthropic.apiKey) {
+    backend = {
+      kind: 'anthropic',
+      api: messagesApiFrom(createAnthropicClient(config)),
+      requestedModel: anthropicCfg.model,
+      effort: anthropicCfg.effort,
+    }
+  }
 
   /** Records the utterance. `replyTo` is the question it really answers: null when the domain refused the link. */
   function startUtterance(input: InterpretInput): { utterance: Utterance; replyTo: string | null } {
@@ -147,16 +189,18 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
     const { utterance, replyTo } = startUtterance(input)
     const id = utterance.id
 
-    if (!api) {
+    if (!backend || agyGuardTripped) {
       const speaker = domain.getMember(input.memberId)
-      const disabled = speaker ? toSpeakerScript(REPLIES.disabled, speaker) : REPLIES.disabled
-      domain.finishUtterance(id, { status: 'error', reply: disabled, error: disabled, model: null, usage: { error: { code: 'ai_disabled' } } })
+      const base = agyGuardTripped ? REPLIES.misconfigured : REPLIES.disabled
+      const msg = speaker ? toSpeakerScript(base, speaker) : base
+      const code = agyGuardTripped ? 'guard_disabled' : 'ai_disabled'
+      domain.finishUtterance(id, { status: 'error', reply: msg, error: msg, model: null, usage: { error: { code } } })
       return respond(id, [])
     }
 
     const touched = new Set<string>()
     const deadline = new AbortController()
-    const deadlineTimer = setTimeout(() => deadline.abort(), deps.deadlineMs ?? INTERPRET_DEADLINE_MS)
+    const deadlineTimer = setTimeout(() => deadline.abort(), deadlineMs)
     deadlineTimer.unref?.()
     let result: LoopResult
     let speakerLang: Pick<Member, 'language'> = { language: 'zh-CN' }
@@ -184,14 +228,21 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
           replyToUtteranceId: replyTo,
         }),
       )
-      result = await runLoop({
-        api,
-        cfg,
-        turnInput,
-        execute: call => executeCall(call, ctx),
-        isCancelled: () => domain.getUtterance(id)?.status === 'undone',
-        signal: deadline.signal,
-      })
+      const execute = (call: Parameters<typeof executeCall>[0]) => executeCall(call, ctx)
+      const isCancelled = () => domain.getUtterance(id)?.status === 'undone'
+      result =
+        backend.kind === 'agy'
+          ? await backend.run({
+              cfg: agyCfg,
+              turnInput,
+              execute,
+              isCancelled,
+              signal: deadline.signal,
+              onGuardFailed: () => {
+                agyGuardTripped = true
+              },
+            })
+          : await runLoop({ api: backend.api, cfg: anthropicCfg, turnInput, execute, isCancelled, signal: deadline.signal })
     } catch (e) {
       // A bug in snapshot building or the loop: the utterance must still finish (never stuck on "processing").
       console.error('[ai] interpret failed', e)
@@ -200,8 +251,9 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
       clearTimeout(deadlineTimer)
     }
     if (result.status === 'error' && result.code === 'aborted' && deadline.signal.aborted) {
-      result = { ...result, code: 'timeout', detail: `utterance deadline (${deps.deadlineMs ?? INTERPRET_DEADLINE_MS} ms) — ${result.detail ?? ''}` }
+      result = { ...result, code: 'timeout', detail: `utterance deadline (${deadlineMs} ms) — ${result.detail ?? ''}` }
     }
+    deps.onTurnResult?.(result)
 
     const changes = domain.getUtterance(id)?.changes ?? []
     // Everything the member reads back is in their script, including the fixed texts below.
@@ -222,7 +274,7 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
         break
       case 'error':
         status = 'error'
-        reply = conv(errorReply(result.code, changes, at => formatInstantZh(at, clock.now(), domain.getFamily().timezone), result.detail))
+        reply = conv(errorReply(result.code, changes, at => formatInstantZh(at, clock.now(), domain.getFamily().timezone), result.detail, backend.kind))
         error = reply
         if (result.code !== 'cancelled') console.warn(`[ai] utterance ${id} failed: ${result.code}${result.detail ? ` — ${result.detail}` : ''}`)
         break
@@ -235,8 +287,9 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
       error,
       model: lastModel,
       usage: {
-        requestedModel: cfg.model,
-        effort: cfg.effort,
+        provider: backend.kind,
+        requestedModel: backend.requestedModel,
+        effort: backend.effort,
         calls: result.usage,
         totals: totals(result.usage),
         tools: result.toolCalls.map(t => ({ name: t.name, ok: t.ok, ...(t.code ? { code: t.code } : {}) })),
@@ -246,5 +299,10 @@ export function createInterpreter(deps: InterpreterDeps): Interpreter {
     return respond(id, touched)
   }
 
-  return { enabled: api !== null, interpret }
+  return {
+    get enabled() {
+      return backend !== null && !agyGuardTripped
+    },
+    interpret,
+  }
 }

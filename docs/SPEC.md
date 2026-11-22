@@ -173,8 +173,21 @@ See `docs/research/claude-api-brief.md` for the API brief (model, effort, fallba
   the reply lands in a template field cut after about 20 characters (§7): one sentence of at most 18 characters, key fact
   first, no opener (已请老公明天18:30买奶，待确认); clarification questions there follow the same limit with short options,
   and board questions get the count plus the one or two most urgent items (还有5件，最急：明天交水费).
-- If `ANTHROPIC_API_KEY` is missing, `enabled = false` and interpret() finishes the utterance with an error explaining that AI
-  isn't configured (manual buttons still work).
+- If `AI_PROVIDER=agy` is set, the interpreter runs headless `agy --sandbox --input-format stream-json
+  --output-format stream-json --log-file <workdir>/agy.log` (default model `gemini-4-neon`, prompt sent over stdin so
+  snapshots and private chats never appear in `ps`) in an isolated per-utterance `0700` temp workspace wired to an
+  ephemeral localhost Streamable HTTP MCP server (`127.0.0.1:0` + per-turn Bearer token) exposing the exact same 11
+  tools from `src/server/ai/tools.ts` (`eager: true`). Without `--dangerously-skip-permissions`, session `--settings`
+  sets `agentMode: ""`, `toolPermission: "request-review"`, `enableTerminalSandbox: true`, `allowNonWorkspaceAccess:
+  false`, explicitly denies `command(*)`/`read_file(*)`/`write_file(*)`/`read_url(*)`/`execute_url(*)`, and allows
+  only those 11 `mcp(family_board/<tool>)` permissions; the custom agent frontmatter sets `tools: [read_file]` so
+  `search_web` and all other built-in tools are not declared to the model at all (and `read_file` itself is denied).
+  A fail-closed `PreToolUse` hook denies everything except the 11 `family_board` MCP tools; if any tool step executes
+  without the guard hook marker, the interpreter disables the `agy` backend fail-closed. After each turn, `agy`'s
+  persisted conversation files under `~/.gemini/antigravity-cli/` (brain, conversations, annotations, and
+  `conversation_summaries.db` rows) are deleted non-blockingly.
+- If neither `AI_PROVIDER=agy` nor `ANTHROPIC_API_KEY` is configured (or `AI_PROVIDER=none`), `enabled = false` and
+  interpret() finishes the utterance with an error explaining that AI isn't configured (manual buttons still work).
 
 ## 5. HTTP server
 

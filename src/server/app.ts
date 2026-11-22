@@ -1,6 +1,6 @@
 // Wiring: builds the AppContext the HTTP server, the scheduler and the CLI share.
 
-import type { MessagesApi } from './ai/index'
+import type { AgyRunner, MessagesApi } from './ai/index'
 import { createInterpreter } from './ai/index'
 import { Bus } from './bus'
 import type { Config } from './config'
@@ -23,6 +23,8 @@ export interface BuildContextOptions {
   clock?: Clock
   /** Fake Anthropic Messages API for tests */
   api?: MessagesApi
+  /** Fake agy CLI runner for tests */
+  agyRunner?: AgyRunner
   /** undefined = from config; null = no speech-to-text */
   stt?: SttProvider | null
   /** Notification channels to use instead of the configured ones (tests) */
@@ -39,7 +41,13 @@ export function buildContext(config: Config, opts: BuildContextOptions = {}): Ap
   // Must come first: getFamily() and every write throw until the family row exists.
   domain.ensureFamily(config.familyName, config.familyTimezone)
   const appSecret = getOrCreateAppSecret(db)
-  const interpreter = createInterpreter({ config, domain, clock, ...(opts.api ? { api: opts.api } : {}) })
+  const interpreter = createInterpreter({
+    config,
+    domain,
+    clock,
+    ...(opts.api ? { api: opts.api } : {}),
+    ...(opts.agyRunner ? { agyRunner: opts.agyRunner } : {}),
+  })
   const stt = opts.stt !== undefined ? opts.stt : createStt(config)
   const notifier = createNotifier({
     config,

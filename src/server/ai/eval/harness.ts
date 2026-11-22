@@ -6,7 +6,8 @@ import { toSimplified } from '../../domain/normalize'
 import { createTestContext, type TestContext } from '../../testing'
 import { addDaysToDate, localDate, zonedToUtc } from '../../time'
 import { createInterpreter } from '../index'
-import type { CallUsage, MessagesApi } from '../loop'
+import type { AgyRunner } from '../agy'
+import type { CallUsage, LoopResult, MessagesApi, ToolCallRecord } from '../loop'
 import { usageOf } from '../loop'
 import type { EvalCase, ExpectedCall, MemberKey, SeedItem } from './cases'
 
@@ -176,7 +177,64 @@ export function describeExpected(e: ExpectedCall): string {
   return `${t}(${args.join(', ')})`
 }
 
+export function observedCallsFromRecords(records: readonly ToolCallRecord[]): ObservedCall[] {
+  return records.map(r => ({
+    name: r.name,
+    input: r.input && typeof r.input === 'object' && !Array.isArray(r.input) ? (r.input as Record<string, unknown>) : {},
+    result: r.ok ? 'ok' : r.code === 'skipped' ? 'not_run' : 'error',
+    ...(!r.ok && r.code && r.code !== 'skipped' ? { code: r.code } : {}),
+  }))
+}
+
 export async function runCase(c: EvalCase, api: MessagesApi, anthropic: Config['anthropic']): Promise<CaseRun> {
+  return evaluateCase(c, t => {
+    const rec = new RecordingApi(api)
+    const config = { ...t.config, ai: { ...t.config.ai, provider: 'anthropic' as const, model: anthropic.model, effort: anthropic.effort, maxIterations: anthropic.maxIterations }, anthropic }
+    const interpreter = createInterpreter({ config, domain: t.domain, clock: t.clock, api: rec })
+    return {
+      interpreter,
+      collect: () => ({ calls: observedCalls(rec), usage: rec.responses.map(usageOf), cost: costOf(rec.responses.map(usageOf)) }),
+    }
+  })
+}
+
+export async function runCaseWithAgy(
+  c: EvalCase,
+  ai: Config['ai'],
+  agy: Config['agy'],
+  opts: { agyRunner?: AgyRunner; deadlineMs?: number } = {},
+): Promise<CaseRun> {
+  return evaluateCase(c, t => {
+    let turnResult: LoopResult | null = null
+    const config = { ...t.config, ai: { ...ai, provider: 'agy' as const }, agy }
+    const interpreter = createInterpreter({
+      config,
+      domain: t.domain,
+      clock: t.clock,
+      ...(opts.agyRunner ? { agyRunner: opts.agyRunner } : {}),
+      ...(opts.deadlineMs ? { deadlineMs: opts.deadlineMs } : {}),
+      onTurnResult: r => {
+        turnResult = r
+      },
+    })
+    return {
+      interpreter,
+      collect: () => ({
+        calls: observedCallsFromRecords(turnResult?.toolCalls ?? []),
+        usage: turnResult?.usage ?? [],
+        cost: { usd: 0, estimated: false },
+      }),
+    }
+  })
+}
+
+async function evaluateCase(
+  c: EvalCase,
+  setup: (t: TestContext) => {
+    interpreter: ReturnType<typeof createInterpreter>
+    collect: () => { calls: ObservedCall[]; usage: CallUsage[]; cost: { usd: number; estimated: boolean } }
+  },
+): Promise<CaseRun> {
   const t = createTestContext()
   const member = (k: MemberKey) => (k === 'husband' ? t.husband : t.wife)
   const today = localDate(t.clock.now(), t.family.timezone)
@@ -185,15 +243,12 @@ export async function runCase(c: EvalCase, api: MessagesApi, anthropic: Config['
   if (c.speakerLanguage) t.domain.updateMember(speaker.id, { language: c.speakerLanguage })
   const seeded = seedItems(t, c.seed ?? [], member, resolveDate)
 
-  const rec = new RecordingApi(api)
-  const config = { ...t.config, anthropic }
-  const interpreter = createInterpreter({ config, domain: t.domain, clock: t.clock, api: rec })
+  const { interpreter, collect } = setup(t)
   const started = Date.now()
   const r = await interpreter.interpret({ memberId: speaker.id, text: c.text, source: c.source ?? 'text' })
   const ms = Date.now() - started
 
-  const calls = observedCalls(rec)
-  const usage = rec.responses.map(usageOf)
+  const { calls, usage, cost } = collect()
   const ids = {
     member: (k: MemberKey) => member(k).id,
     item: (k: string) => seeded.get(k)?.id ?? `missing-seed:${k}`,
@@ -216,7 +271,6 @@ export async function runCase(c: EvalCase, api: MessagesApi, anthropic: Config['
   ])
   for (const [k, it] of seeded) names.set(it.id, `${it.title}#${k}`)
   for (const it of r.items) if (!names.has(it.id)) names.set(it.id, it.title)
-  const cost = costOf(usage)
   return { case: c, status: r.utterance.status, reply: r.utterance.reply, calls, usage, failures, costUsd: cost.usd, costEstimated: cost.estimated, ms, names }
 }
 

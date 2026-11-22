@@ -35,6 +35,7 @@ fi
 xml() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 X_DIR="$(printf '%s' "$DIR" | xml)"
 X_NODE="$(printf '%s' "$NODE" | xml)"
+X_HOME="$(printf '%s' "$HOME" | xml)"
 LOG="$X_DIR/data/logs/server.log"
 
 PLIST_XML="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -50,7 +51,7 @@ PLIST_XML="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>$X_HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
