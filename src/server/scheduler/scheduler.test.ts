@@ -594,3 +594,20 @@ describe('DST', () => {
     expect(t.outbox.exists(`digest:${t.husband.id}:2027-04-04`)).toBe(true)
   })
 })
+
+describe('repeating items', () => {
+  it('a daily reminder pings, then the tick after the grace period moves it to tomorrow and it pings again', async () => {
+    const { t, notifier, scheduler } = setup()
+    const pill = t.domain.createItem(t.as(t.wife), { kind: 'reminder', title: '吃药', dueAt: iso('2026-10-22', '08:00'), repeat: { freq: 'daily' } })
+    t.clock.set(at('2026-10-22', '08:00'))
+    await scheduler.tick()
+    const pings = () => notifier.calls.filter(n => n.itemId === pill.id)
+    expect(pings().map(n => n.title)).toEqual(['提醒：吃药'])
+    t.clock.set(at('2026-10-22', '10:00'))
+    await scheduler.tick()
+    expect(t.domain.getItem(pill.id)!.dueAt).toBe(iso('2026-10-23', '08:00'))
+    t.clock.set(at('2026-10-23', '08:00'))
+    await scheduler.tick()
+    expect(pings().map(n => n.dedupeKey)).toEqual([`reminder:${pill.id}:${iso('2026-10-22', '08:00')}`, `reminder:${pill.id}:${iso('2026-10-23', '08:00')}`])
+  })
+})

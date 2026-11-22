@@ -192,14 +192,15 @@ export function planRequestSent(item: Item, round: number, env: PolicyEnv): NewN
 
 /**
  * To the requester when the owner accepts/declines, or when anyone completes the request ('done').
- * `responderId` defaults to the actor (for accept/decline it is the owner).
+ * `responderId` defaults to the actor (for accept/decline it is the owner). A repeating request is completed once per
+ * occurrence: `occurrence` (its local date) is appended to the key, `request_answered:<id>:done:<n>:<date>`.
  */
 export function planRequestAnswered(
   item: Item,
   response: 'accept' | 'decline' | 'done',
   round: number,
   env: PolicyEnv,
-  opts: { message?: string | null; responderId?: string | null } = {},
+  opts: { message?: string | null; responderId?: string | null; occurrence?: string | null } = {},
 ): NewNotification[] {
   if (item.kind !== 'request' || !notActor(item.requestedBy, env)) return []
   const nameOf = nameLookup(env.members)
@@ -212,7 +213,7 @@ export function planRequestAnswered(
       fireAt: env.now,
       ...requestAnsweredText(item, response, nameOf(responder), opts.message ?? null, env.now, env.timezone),
       actions: actions('open'),
-      dedupeKey: dedupeKeys.requestAnswered(item.id, response, round),
+      dedupeKey: dedupeKeys.requestAnswered(item.id, response, round) + (opts.occurrence ? `:${opts.occurrence}` : ''),
       respectQuietHours: true,
       utteranceId: env.utteranceId ?? null,
     },

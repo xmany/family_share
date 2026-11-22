@@ -28,13 +28,18 @@ function hasColumn(db: Db, table: string, column: string): boolean {
 /** Brings a database created by an older version up to SCHEMA_SQL. Every step is safe to run again. */
 function migrate(db: Db): void {
   // private chat with the assistant: existing utterances were all said in the family chat
-  if (!hasColumn(db, 'utterances', 'visibility')) {
-    try {
-      db.exec(`ALTER TABLE utterances ADD COLUMN visibility TEXT NOT NULL DEFAULT 'family' CHECK (visibility IN ('family', 'private'))`)
-    } catch (e) {
-      // the server and `npm run family` can open an old database at the same moment: the other one added it first
-      if (!hasColumn(db, 'utterances', 'visibility')) throw e
-    }
+  addColumn(db, 'utterances', 'visibility', `TEXT NOT NULL DEFAULT 'family' CHECK (visibility IN ('family', 'private'))`)
+  // repeating items: existing items do not repeat
+  addColumn(db, 'items', 'repeat', 'TEXT')
+}
+
+function addColumn(db: Db, table: string, column: string, definition: string): void {
+  if (hasColumn(db, table, column)) return
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+  } catch (e) {
+    // the server and `npm run family` can open an old database at the same moment: the other one added it first
+    if (!hasColumn(db, table, column)) throw e
   }
 }
 

@@ -1,4 +1,5 @@
 // The deterministic background loop (SPEC §3). Each tick:
+//   0. repeating items whose occurrence went by uncompleted move on to their next one (Domain.rollOverRepeats);
 //   1. generators: daily digest (member.digestTime), stale nudges (19:00), weekly sync (Sunday 19:00) — each runs
 //      when its local time fell between the previous tick and now (the previous tick time is kept in kv, so the first
 //      tick after downtime catches up, same local day only); dedupe keys make re-runs harmless;
@@ -155,6 +156,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const arrived = (t: Date) => t.getTime() > from.getTime() && t.getTime() <= now.getTime()
     const today = localDate(now, tz)
     const members = domain.listMembers()
+    // repeating items whose occurrence went by uncompleted move on first, so the digest below sees the next one
+    guarded('repeat rollover', () => domain.rollOverRepeats())
     let active: Item[] | null = null
     const env = (): GenEnv => ({ now, tz, members, items: (active ??= domain.listActiveItems()) })
     let generated = 0

@@ -78,7 +78,7 @@ export function buildRequest(cfg: InterpreterConfig, messages: BetaMessageParam[
 ## 3. Tools: definition shape and budget
 Strict-mode limits, totalled across all strict tools in one request: **20 strict tools, 24 optional parameters, 16 parameters with union types** (`anyOf` or type arrays). Unsupported keywords include `minimum`, `maximum`, `minLength`, `maxLength`, and `minItems` other than 0 or 1. A grammar that is too large returns 400 "Schema is too complex for compilation". Compiled grammars are cached for 24 h. Enum values may come back with different casing, so compare case-insensitively.
 
-This design uses **11 strict tools, 20 optional parameters, 0 unions** (as built in `src/server/ai/tools.ts`). A lint test enforces the limits. There are no nullable fields: use `due_change: keep|set|clear` instead of a nullable date.
+This design uses **11 strict tools, 23 optional parameters, 0 unions** (as built in `src/server/ai/tools.ts`). A lint test enforces the limits. There are no nullable fields: use `due_change: keep|set|clear` instead of a nullable date.
 ```ts
 const ITEM_ID = '^i_[0-9a-km-np-z]{10}$'      // matches src/server/ids.ts alphabet (no l/o)
 const MEMBER_ID = '^m_[0-9a-km-np-z]{10}$'
@@ -91,12 +91,12 @@ function tool(name: string, description: string, properties: Record<string, obje
 | Tool | Required | Optional | When (tool description says) |
 |---|---|---|---|
 | search_items | query, include_closed | - | The item may exist but is not in the snapshot (closed or older), or the user asks about past items |
-| create_item | kind(task\|idea\|reminder), title, explicit_assignment, priority(low\|normal\|high), allow_duplicate | owner_id, due_date, due_time, details | New item owned by the speaker, or an unassigned idea, only after checking the snapshot/search |
-| update_item | item_id, due_change(keep\|set\|clear), explicit_handover | title, kind, owner_id, due_date, due_time, priority, status(open\|in_progress\|blocked) | Correcting or rescheduling an existing item (a new due date also clears a running snooze) |
+| create_item | kind(task\|idea\|reminder), title, explicit_assignment, priority(low\|normal\|high), allow_duplicate | owner_id, due_date, due_time, details, repeat (RRULE subset) | New item owned by the speaker, or an unassigned idea, only after checking the snapshot/search |
+| update_item | item_id, due_change(keep\|set\|clear), explicit_handover | title, kind, owner_id, due_date, due_time, priority, status(open\|in_progress\|blocked), repeat (RRULE or NONE) | Correcting or rescheduling an existing item (a new due date also clears a running snooze) |
 | add_note | item_id, text | - | Adding detail to an existing item |
-| send_request | to_member_id, title, priority, allow_duplicate | existing_item_id, due_date, due_time, details | Speaker wants another member to do something (让/叫/麻烦…) |
+| send_request | to_member_id, title, priority, allow_duplicate | existing_item_id, due_date, due_time, details, repeat | Speaker wants another member to do something (让/叫/麻烦…) |
 | respond_to_request | item_id, response(accept\|decline) | message | Speaker answers a pending request addressed to them |
-| complete_item | item_id, resolution(done\|dropped) | note | Finished, or 算了/取消/删掉 → `dropped` (never delete). Dropping a request notifies the other side; the result says `notified` / `not_notified` |
+| complete_item | item_id, resolution(done\|dropped\|skipped) | note | Finished, or 算了/取消/删掉 → `dropped` (never delete). Dropping a request notifies the other side; the result says `notified` / `not_notified` |
 | snooze_item | item_id, preset(tonight\|tomorrow\|weekend\|next_week\|custom) | until_date, until_time | 晚点再提醒 / 明天再说 (maps to the existing `resolveSnoozePreset`). Silences the item until then (its due pings are skipped) and pings once; the due date stays. If the thing itself moved, `update_item` due_change set instead |
 | set_reminder | item_id, remind_date, remind_time | member_ids[] | Extra ping on an existing item |
 | cancel_reminder | item_id, remind_date, remind_time | - | 取消提醒 for an extra ping (另有提醒 in the snapshot): cancels that item's extra pings at that local time; the item and its due ping stay |

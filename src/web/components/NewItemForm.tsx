@@ -6,8 +6,9 @@ import type { CreateItemBody } from '../../shared/api'
 import type { ItemKind, Member } from '../../shared/types'
 import { zonedToUtc } from '../../shared/time'
 import { api, errorMessage } from '../lib/api'
-import { mergeItems } from '../lib/store'
+import { mergeItems, useApp } from '../lib/store'
 import { toast } from '../lib/toast'
+import { RepeatPicker, repeatInputFor, type RepeatDraft } from './RepeatPicker'
 
 const KINDS: Array<{ kind: ItemKind; label: string; hint: string }> = [
   { kind: 'task', label: '我来做', hint: '记在自己名下' },
@@ -34,7 +35,9 @@ export function NewItemForm({
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
   const [details, setDetails] = useState('')
+  const [repeat, setRepeat] = useState<RepeatDraft>({ mode: 'none', weekdays: [] })
   const [busy, setBusy] = useState(false)
+  const repeats = useApp().me?.repeats === true
   const deviceTz = Intl.DateTimeFormat().resolvedOptions().timeZone
 
   const submit = async () => {
@@ -54,6 +57,8 @@ export function NewItemForm({
           return toast('时间格式不对', 'danger')
         }
       } else body.dueDate = date
+      const rule = repeats ? repeatInputFor(repeat, date) : null
+      if (rule) body.repeat = rule
     }
     setBusy(true)
     try {
@@ -138,6 +143,7 @@ export function NewItemForm({
           </div>
         </div>
       )}
+      {kind !== 'idea' && repeats && <RepeatPicker id="new-repeat" draft={repeat} date={date} onChange={setRepeat} />}
       <div>
         <label className="label" htmlFor="new-details">
           说明（可不填）

@@ -149,6 +149,8 @@ export const api = {
   updateItem: (id: string, body: UpdateItemBody) => request<ItemResponse>('PATCH', `/api/items/${enc(id)}`, { body }),
   respond: (id: string, body: RespondBody) => request<ItemResponse>('POST', `/api/items/${enc(id)}/respond`, { body }),
   complete: (id: string, body: CompleteBody = {}) => request<ItemResponse>('POST', `/api/items/${enc(id)}/complete`, { body }),
+  /** repeating items: skip this occurrence */
+  skip: (id: string, body: CompleteBody = {}) => request<ItemResponse>('POST', `/api/items/${enc(id)}/skip`, { body }),
   snooze: (id: string, body: SnoozeBody) => request<ItemResponse>('POST', `/api/items/${enc(id)}/snooze`, { body }),
   addNote: (id: string, body: NoteBody) => request<ItemResponse>('POST', `/api/items/${enc(id)}/notes`, { body }),
 

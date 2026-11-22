@@ -22,6 +22,7 @@ import type {
   UtteranceStatus,
 } from '../../shared/types'
 import { ACTIVE_STATUSES } from '../../shared/types'
+import { asRepeatRule } from '../../shared/repeat'
 
 // ---------------------------------------------------------------------------------------------
 // Row shapes (exactly the columns in schema.ts)
@@ -57,6 +58,7 @@ export interface ItemRow {
   requested_by: string | null
   due_at: string | null
   due_date: string | null
+  repeat: string | null
   snoozed_until: string | null
   snooze_count: number
   priority: string
@@ -159,6 +161,7 @@ export function toItem(r: ItemRow, remindAt: string | null): Item {
     requestedBy: r.requested_by,
     dueAt: r.due_at,
     dueDate: r.due_date,
+    repeat: asRepeatRule(parseJson<unknown>(r.repeat, null)),
     remindAt,
     snoozedUntil: r.snoozed_until,
     snoozeCount: r.snooze_count,
@@ -228,6 +231,7 @@ export function itemToRow(i: Item): ItemRow {
     requested_by: i.requestedBy,
     due_at: i.dueAt,
     due_date: i.dueDate,
+    repeat: i.repeat ? JSON.stringify(i.repeat) : null,
     snoozed_until: i.snoozedUntil,
     snooze_count: i.snoozeCount,
     priority: i.priority,
@@ -255,6 +259,7 @@ const ITEM_COLUMNS = [
   'requested_by',
   'due_at',
   'due_date',
+  'repeat',
   'snoozed_until',
   'snooze_count',
   'priority',

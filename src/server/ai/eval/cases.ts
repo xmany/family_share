@@ -5,6 +5,7 @@
 // "+2" = 周五 10-23, "+3" = 周六 10-24, "+4" = 周日 10-25, "+5" = 下周一 10-26, "+6" = 下周二 10-27.
 
 import type { ItemKind, ItemStatus } from '../../../shared/types'
+import type { RepeatInput } from '../../../shared/repeat'
 import type { ToolName } from '../tools'
 
 export type MemberKey = 'husband' | 'wife'
@@ -27,6 +28,8 @@ export interface SeedItem {
   notes?: string[]
   /** Extra pings set with setReminder before the status change ("+N" or YYYY-MM-DD, HH:MM); member defaults to the owner */
   reminders?: Array<{ date: string; time: string; member?: MemberKey }>
+  /** Makes it a repeating item (needs dueDate) */
+  repeat?: RepeatInput
 }
 
 export interface ExpectedCall {
@@ -43,7 +46,9 @@ export interface ExpectedCall {
   /** HH:MM or "none" — due_time / remind_time / until_time */
   time?: string
   kind?: 'task' | 'idea' | 'reminder'
-  resolution?: 'done' | 'dropped'
+  resolution?: 'done' | 'dropped' | 'skipped'
+  /** The `repeat` argument, upper-cased and without spaces, must contain each of these (e.g. ["FREQ=WEEKLY"]); "none" = not given */
+  repeat?: string[] | 'none'
   response?: 'accept' | 'decline'
   preset?: string
   status?: string
@@ -212,9 +217,51 @@ export const CASES: EvalCase[] = [
     id: 'repeating-trash',
     speaker: 'wife',
     text: '每周二提醒我倒垃圾',
-    expect: [{ tool: 'create_item', date: '+6', titleIncludes: ['垃圾'] }],
-    replyMatches: '重复|还不支持|暂不支持|暂时不支持|不能自动',
-    why: 'repeats unsupported in v0: create the next occurrence and say so',
+    expect: [{ tool: 'create_item', date: '+6', titleIncludes: ['垃圾'], repeat: ['FREQ=WEEKLY'] }],
+    replyMatches: '每周二|每个周二|每周',
+    why: 'one repeating item from the next Tuesday; the reply says it repeats',
+  },
+  {
+    id: 'repeating-sunday-night-bins',
+    speaker: 'husband',
+    text: '今天晚上要倒垃圾桶。这是每周天都要做的事情。可否做一个重复的任务？每周天晚上九点提醒。',
+    expect: [{ tool: 'create_item', date: '+4', time: '21:00', titleIncludes: ['垃圾'], repeat: ['FREQ=WEEKLY'] }],
+    forbid: ['ask_clarification'],
+    replyMatches: '每周日|每周天|每个周日|每周',
+    why: 'the first occurrence is the next Sunday (today is Wednesday); weekly from it',
+  },
+  {
+    id: 'repeating-two-days',
+    speaker: 'wife',
+    text: '每周二和周五晚上八点提醒我拿回收箱出去',
+    expect: [{ tool: 'create_item', date: '+2', time: '20:00', repeat: ['FREQ=WEEKLY', 'BYDAY=', 'TU', 'FR'] }],
+    why: 'two weekdays in one rule; the first is this Friday',
+  },
+  {
+    id: 'repeating-done-moves-on',
+    speaker: 'husband',
+    text: '垃圾倒好了',
+    seed: [{ key: 'bins', kind: 'task', title: '倒垃圾', owner: 'husband', dueDate: '+0', dueTime: '21:00', repeat: { freq: 'weekly' } }],
+    expect: [{ tool: 'complete_item', item: 'bins', resolution: 'done' }],
+    forbid: ['create_item'],
+    why: 'done on a repeating item; the server moves it on',
+  },
+  {
+    id: 'repeating-skip-once',
+    speaker: 'husband',
+    text: '这周日不用倒垃圾了，我们出门',
+    seed: [{ key: 'bins', kind: 'task', title: '倒垃圾', owner: 'husband', dueDate: '+4', dueTime: '21:00', repeat: { freq: 'weekly' } }],
+    expect: [{ tool: 'complete_item', item: 'bins', resolution: 'skipped' }],
+    forbid: ['create_item'],
+    why: 'only this occurrence is off: skipped, not dropped',
+  },
+  {
+    id: 'repeating-unsupported-pattern',
+    speaker: 'wife',
+    text: '每个月第一个周六带孩子去图书馆',
+    expect: [{ tool: 'create_item', titleIncludes: ['图书馆'], repeat: 'none' }],
+    replyMatches: '不能自动|没法自动|无法自动|不支持|下次再',
+    why: 'nth weekday of the month cannot repeat: create the next one and say so',
   },
   {
     id: 'next-wednesday-movie',

@@ -36,6 +36,15 @@ const PRIORITIES = ['low', 'normal', 'high'] as const
 
 export const joinSchema = z.object({ token: z.string().min(1).max(200) })
 
+/** RepeatInput (src/shared/repeat.ts); ranges and combinations are the domain's to check. */
+const repeatSchema = z.object({
+  freq: z.enum(['daily', 'weekly', 'monthly', 'yearly']),
+  interval: z.number().int().optional(),
+  weekdays: z.array(z.number().int()).max(7).optional(),
+  monthDay: z.number().int().optional(),
+  month: z.number().int().optional(),
+})
+
 export const createItemSchema = z.object({
   kind: z.enum(KINDS),
   title: str(1000),
@@ -47,6 +56,7 @@ export const createItemSchema = z.object({
     .enum(PRIORITIES)
     .nullish()
     .transform(v => v ?? undefined),
+  repeat: repeatSchema.nullish().transform(v => v ?? undefined),
 })
 
 export const updateItemSchema = z.object({
@@ -58,6 +68,8 @@ export const updateItemSchema = z.object({
   dueAt: str(100).nullable().optional(),
   dueDate: str(20).nullable().optional(),
   priority: z.enum(PRIORITIES).optional(),
+  /** null = stop repeating (the contract gives null a meaning here) */
+  repeat: repeatSchema.nullable().optional(),
 })
 
 export const respondSchema = z.object({

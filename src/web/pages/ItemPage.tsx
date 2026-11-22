@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { ItemDetailResponse, UpdateItemBody } from '../../shared/api'
 import type { Item, Member } from '../../shared/types'
+import { repeatLabel } from '../../shared/repeat'
 import {
   formatInstantZh,
   localDate,
@@ -17,7 +18,8 @@ import { KIND_LABEL, PRIORITY_LABEL, ROLE_LABEL } from '../lib/labels'
 import { mergeItems, useApp, useNow } from '../lib/store'
 import { shareOrCopy, toast } from '../lib/toast'
 import { KindIcon, RespondButtons, StatusPill, nameFor } from '../components/items'
-import { IconCheck, IconEdit, IconNote, IconShare, IconSnooze } from '../components/Icons'
+import { IconCheck, IconEdit, IconNote, IconRepeat, IconShare, IconSnooze } from '../components/Icons'
+import { RepeatPicker, draftFromRule, repeatInputFor, type RepeatDraft } from '../components/RepeatPicker'
 import { Avatar, ErrorNote, LoadingScreen, PageHeader, Pill } from '../components/ui'
 
 const SNOOZE_PRESETS: Array<{ preset: SnoozePreset; label: string }> = [
@@ -90,15 +92,21 @@ export function ItemPage({ id }: { id: string }) {
   const waitingOnThem = isRequest && item.status === 'pending' && item.requestedBy === meId && item.ownerId !== meId
   const owner = item.ownerId ? members.get(item.ownerId) : undefined
   const canWork = active && !(isRequest && (item.status === 'pending' || item.status === 'declined'))
+  const repeating = !!item.repeat
+  /** "下次 11/1 周日 21:00" for the toast after a repeating item moved on */
+  const nextLabel = (updated: Item) => {
+    const d = dueInfo(updated, new Date(), tz)
+    return d ? `，下次 ${d.label}` : ''
+  }
 
-  const act = async (key: string, fn: () => Promise<{ item: Item }>, ok: string) => {
+  const act = async (key: string, fn: () => Promise<{ item: Item }>, ok: string | ((updated: Item) => string)) => {
     setBusy(key)
     try {
       const { item: updated } = await fn()
       mergeItems([updated])
       setDetail(d => (d ? { ...d, item: updated } : d))
       setPanel(null)
-      toast(ok, 'ok')
+      toast(typeof ok === 'function' ? ok(updated) : ok, 'ok')
       if (!boardItem) void load() // otherwise the board change triggers the refetch
     } catch (e) {
       toast(errorMessage(e), 'danger')
@@ -167,6 +175,14 @@ export function ItemPage({ id }: { id: string }) {
                 <span className={overdue ? 'font-semibold text-danger' : due.today ? 'font-semibold text-accent-strong' : ''}>
                   <span className="when">{due.label}</span>
                   {overdue && '（已过期）'}
+                </span>
+              </Field>
+            )}
+            {item.repeat && (
+              <Field label="重复">
+                <span className="inline-flex items-center gap-1.5">
+                  <IconRepeat size={16} className="flex-none text-muted" />
+                  {repeatLabel(item.repeat, item.dueAt ? localTime(new Date(item.dueAt), tz) : null)}
                 </span>
               </Field>
             )}
@@ -243,10 +259,12 @@ export function ItemPage({ id }: { id: string }) {
                 type="button"
                 className="btn btn-primary btn-lg flex-1"
                 disabled={!!busy}
-                onClick={() => void act('done', () => api.complete(item.id, {}), '完成了，辛苦啦')}
+                onClick={() =>
+                  void act('done', () => api.complete(item.id, {}), updated => (repeating ? `这次完成了${nextLabel(updated)}` : '完成了，辛苦啦'))
+                }
               >
                 <IconCheck size={20} />
-                {busy === 'done' ? '处理中…' : '完成'}
+                {busy === 'done' ? '处理中…' : repeating ? '完成这次' : '完成'}
               </button>
               {item.kind !== 'idea' && (
                 <button
@@ -324,6 +342,7 @@ export function ItemPage({ id }: { id: string }) {
             item={item}
             members={board?.members ?? []}
             tz={tz}
+            repeats={app.me?.repeats === true}
             busy={busy === 'edit'}
             onCancel={() => setPanel(null)}
             onSave={body => void act('edit', () => api.updateItem(item.id, body), '已保存')}
@@ -339,6 +358,16 @@ export function ItemPage({ id }: { id: string }) {
 
         {canWork && (
           <div className="flex flex-wrap gap-2">
+            {repeating && (
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={!!busy}
+                onClick={() => void act('skip', () => api.skip(item.id, {}), updated => `已跳过这次${nextLabel(updated)}`)}
+              >
+                跳过这次
+              </button>
+            )}
             {item.status !== 'in_progress' && (
               <button
                 type="button"
@@ -360,6 +389,7 @@ export function ItemPage({ id }: { id: string }) {
               </button>
             )}
             <DropButton
+              label={repeating ? '以后都不做了' : '不做了'}
               disabled={!!busy}
               onConfirm={() => void act('drop', () => api.updateItem(item.id, { status: 'dropped' }), '好的，不做了')}
             />
@@ -481,6 +511,7 @@ function EditForm({
   item,
   members,
   tz,
+  repeats,
   busy,
   onCancel,
   onSave,
@@ -488,6 +519,8 @@ function EditForm({
   item: Item
   members: Member[]
   tz: string
+  /** the server understands repeating items (MeResponse.repeats) */
+  repeats: boolean
   busy: boolean
   onCancel: () => void
   onSave: (body: UpdateItemBody) => void
@@ -497,6 +530,9 @@ function EditForm({
   const [date, setDate] = useState(item.dueAt ? localDate(new Date(item.dueAt), tz) : (item.dueDate ?? ''))
   const [time, setTime] = useState(item.dueAt ? localTime(new Date(item.dueAt), tz) : '')
   const [details, setDetails] = useState(item.details ?? '')
+  const [repeat, setRepeat] = useState<RepeatDraft>(() => draftFromRule(item.repeat))
+  /** only a rule the person changed is sent: a new date alone moves this occurrence and keeps the series */
+  const [repeatTouched, setRepeatTouched] = useState(false)
   const isRequest = item.kind === 'request'
   const isIdea = item.kind === 'idea'
   const deviceTz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -537,6 +573,11 @@ function EditForm({
           body.dueAt = null
           body.dueDate = null
         }
+      }
+      if (repeats && repeatTouched && repeat.mode !== 'keep') {
+        const input = date ? repeatInputFor(repeat, date) : null
+        if (input) body.repeat = input
+        else if (item.repeat) body.repeat = null
       }
     }
     if (Object.keys(body).length === 0) {
@@ -601,7 +642,7 @@ function EditForm({
             />
           </div>
           <div className="mt-1 flex min-h-[40px] items-center justify-between">
-            <p className="hint">只填日期 = 那天之内</p>
+            <p className="hint">{item.repeat && !repeatTouched ? '改日期只改这一次，以后照旧' : '只填日期 = 那天之内'}</p>
             {(date || time) && (
               <button
                 type="button"
@@ -616,6 +657,18 @@ function EditForm({
             )}
           </div>
         </div>
+      )}
+      {!isIdea && repeats && (
+        <RepeatPicker
+          id="edit-repeat"
+          draft={repeat}
+          date={date}
+          current={item.repeat}
+          onChange={d => {
+            setRepeat(d)
+            setRepeatTouched(true)
+          }}
+        />
       )}
       <div>
         <label className="label" htmlFor="edit-details">

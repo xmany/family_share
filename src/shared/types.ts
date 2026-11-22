@@ -63,6 +63,29 @@ export const CLOSED_STATUSES: readonly ItemStatus[] = ['done', 'dropped']
 
 export type Priority = 'low' | 'normal' | 'high'
 
+export type RepeatFreq = 'daily' | 'weekly' | 'monthly' | 'yearly'
+
+/**
+ * How a repeating item comes back (helpers and labels in src/shared/repeat.ts). A repeating item is one item that
+ * moves on: completing or skipping it moves its due date to the next occurrence instead of closing it.
+ */
+export interface RepeatRule {
+  freq: RepeatFreq
+  /** Every `interval` days / weeks / months / years (1 = every one) */
+  interval: number
+  /** weekly: the weekdays it falls on, ascending (0 = Sunday … 6 = Saturday); [] otherwise */
+  weekdays: number[]
+  /** monthly / yearly: day of the month (a month without it uses its last day); null otherwise */
+  monthDay: number | null
+  /** yearly: month 1–12; null otherwise */
+  month: number | null
+  /**
+   * Local date of the occurrence the item currently stands for, where interval counting starts. It stays put when a
+   * single occurrence is moved (这周改到周一), so the next one still follows the series.
+   */
+  anchor: string
+}
+
 export interface Item {
   id: string
   kind: ItemKind
@@ -78,6 +101,8 @@ export interface Item {
   dueAt: string | null
   /** Local date when only the day is known (mutually exclusive with dueAt) */
   dueDate: string | null
+  /** Set when the item repeats; dueAt / dueDate is then the current occurrence. Needs a due; never on ideas. */
+  repeat: RepeatRule | null
   /** Next scheduled notification for this item (derived; read-only) */
   remindAt: string | null
   snoozedUntil: string | null
