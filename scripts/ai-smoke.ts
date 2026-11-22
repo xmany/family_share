@@ -5,10 +5,12 @@
 //
 // Does nothing (exit 0) when AI is not configured.
 
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import type { BetaMessage, BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import { loadConfig } from '../src/server/config'
-import { createInterpreter } from '../src/server/ai/index'
+import { createInterpreter, defaultAgyAppDataDir, runAgyLoop } from '../src/server/ai/index'
 import { createAnthropicClient, messagesApiFrom } from '../src/server/ai/client'
 import { buildRequest, loopConfigFrom, usageOf } from '../src/server/ai/loop'
 import { gatherSnapshot, renderTurnInput } from '../src/server/ai/snapshot'
@@ -31,10 +33,24 @@ async function smokeAgy(config: ReturnType<typeof loadConfig>): Promise<void> {
   console.log(`provider agy (${config.agy.path}), model ${config.ai.model}, effort ${config.ai.effort}\n`)
   const t = createTestContext()
   t.domain.createItem(t.as(t.wife), { kind: 'task', title: '卖旧柜子' })
+  let guardVerified = false
+  let guardToolCalls = 0
+  let conversationId: string | null = null
   const interpreter = createInterpreter({
     config: { ...t.config, ai: config.ai, agy: config.agy },
     domain: t.domain,
     clock: t.clock,
+    agyRunner: args =>
+      runAgyLoop({
+        ...args,
+        onGuardVerified(verified, count) {
+          guardVerified = verified
+          guardToolCalls = count
+        },
+      }),
+    onTurnResult(r) {
+      conversationId = r.usage.at(-1)?.requestId ?? null
+    },
   })
   const t0 = Date.now()
   const res = await interpreter.interpret({
@@ -48,7 +64,18 @@ async function smokeAgy(config: ReturnType<typeof loadConfig>): Promise<void> {
   const row = t.db.prepare('SELECT model, usage FROM utterances WHERE id = ?').get(res.utterance.id) as { model: string | null; usage: string }
   const usage = JSON.parse(row.usage) as { totals?: Record<string, number>; tools?: Array<{ name: string; ok: boolean; code?: string }> }
   console.log(`  model=${row.model ?? '-'} totals=${JSON.stringify(usage.totals ?? {})} tools=${JSON.stringify(usage.tools ?? [])}`)
-  const failed = res.utterance.status !== 'done' || res.utterance.changes.length === 0
+  console.log(`  PreToolUse guard verified: ${guardVerified} (${guardToolCalls} MCP tool call(s))`)
+
+  let cleaned = true
+  if (conversationId) {
+    const appData = defaultAgyAppDataDir()
+    const brainLeft = existsSync(join(appData, 'brain', conversationId))
+    const convLeft = existsSync(join(appData, 'conversations', `${conversationId}.db`))
+    cleaned = !brainLeft && !convLeft
+    console.log(`  conversation cleanup (${conversationId}): ${cleaned ? 'ok' : `LEAKED (brain=${brainLeft}, conv=${convLeft})`}`)
+  }
+
+  const failed = res.utterance.status !== 'done' || res.utterance.changes.length === 0 || !guardVerified || !cleaned
   console.log(failed ? '\nSMOKE FAILED' : '\nSMOKE OK')
   if (failed) process.exitCode = 1
 }

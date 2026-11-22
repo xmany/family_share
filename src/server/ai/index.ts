@@ -24,7 +24,7 @@ import { toSpeakerScript } from './script'
 import { gatherSnapshot, renderTurnInput } from './snapshot'
 
 export type { AgyConfig, AgyLoopArgs, AgyRunner, AgySpawnImpl } from './agy'
-export { AGY_AGENT_NAME, AGY_DEFAULT_MODEL, AgyStreamParser, agyConfigFrom, buildAgyArgs, classifyAgyError, extractAgyStderrError, hasEffortSuffix, renderAgentMarkdown, renderGuardHookScript, renderHooksConfig, renderMcpConfig, runAgyLoop } from './agy'
+export { AGY_AGENT_NAME, AGY_DEFAULT_MODEL, AgyStreamParser, agyConfigFrom, buildAgyArgs, classifyAgyError, cleanupAgyConversation, defaultAgyAppDataDir, extractAgyStderrError, hasEffortSuffix, renderAgentMarkdown, renderAgySettings, renderGuardHookScript, renderHooksConfig, renderMcpConfig, renderStreamJsonInput, runAgyLoop } from './agy'
 export type { McpRpcResponse, McpServerHandle, McpToolDefinition, McpTurnSession } from './mcp'
 export { MCP_PATH, MCP_PROTOCOL_VERSION, MCP_SERVER_NAME, MCP_TOOLS, createMcpTurnSession, handleMcpJsonRpc, startMcpServer } from './mcp'
 export type { MessagesApi } from './loop'

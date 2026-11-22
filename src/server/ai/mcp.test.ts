@@ -116,7 +116,7 @@ describe('MCP JSON-RPC handler', () => {
     expect(JSON.parse(out.content[0]!.text)).toEqual({ ok: false, code: 'internal', message: 'db locked' })
   })
 
-  it('records ask_clarification (trimming/deduping options to 4) and blocks later tool calls', async () => {
+  it('ask_clarification trims/dedupes options to 4; a sibling write after it cancels the question so nothing is silently lost', async () => {
     const ran: string[] = []
     const session = createMcpTurnSession({
       execute: c => {
@@ -138,10 +138,19 @@ describe('MCP JSON-RPC handler', () => {
     expect(askRes.isError).toBe(false)
     expect(session.clarification).toEqual({ question: '哪一个？', options: ['修柜门', '装窗帘', 'a', 'b'] })
 
+    // read-only search_items loses nothing when skipped: clarification stays intact
+    const ro = await handleMcpJsonRpc(
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'search_items', arguments: { query: '柜门', include_closed: false } } },
+      session,
+    )
+    expect(JSON.parse((ro.body!.result as { content: Array<{ text: string }> }).content[0]!.text)).toMatchObject({ ok: false, code: 'skipped' })
+    expect(session.clarification).toEqual({ question: '哪一个？', options: ['修柜门', '装窗帘', 'a', 'b'] })
+
+    // a sibling mutating tool after ask_clarification rejects with not_run AND cancels the tentative clarification
     const after = await handleMcpJsonRpc(
       {
         jsonrpc: '2.0',
-        id: 2,
+        id: 3,
         method: 'tools/call',
         params: { name: 'create_item', arguments: { kind: 'task', title: '买牛奶', explicit_assignment: false, priority: 'normal', allow_duplicate: false } },
       },
@@ -149,7 +158,95 @@ describe('MCP JSON-RPC handler', () => {
     )
     const afterRes = after.body!.result as { isError: boolean; content: Array<{ text: string }> }
     expect(afterRes.isError).toBe(true)
-    expect(JSON.parse(afterRes.content[0]!.text)).toMatchObject({ ok: false, code: 'clarification_pending' })
+    expect(JSON.parse(afterRes.content[0]!.text)).toMatchObject({ ok: false, code: 'not_run' })
+    expect(session.clarification).toBeNull()
+    expect(ran).toEqual([])
+  })
+
+  it('rejects ask_clarification if a sibling tool in the same round failed, then allows it on the next round', async () => {
+    const session = createMcpTurnSession({
+      execute: () => ({ ok: false, code: 'possible_duplicate', message: '已有同名事项' }),
+    })
+
+    await handleMcpJsonRpc(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'create_item', arguments: { kind: 'task', title: '买牛奶', explicit_assignment: false, priority: 'normal', allow_duplicate: false } },
+      },
+      session,
+    )
+    const askSameRound = await handleMcpJsonRpc(
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'ask_clarification', arguments: { question: '要新建吗？', options: ['新建', '不用'] } } },
+      session,
+    )
+    const sameRes = askSameRound.body!.result as { isError: boolean; content: Array<{ text: string }> }
+    expect(sameRes.isError).toBe(true)
+    expect(JSON.parse(sameRes.content[0]!.text)).toMatchObject({ ok: false, code: 'not_alone' })
+    expect(session.clarification).toBeNull()
+
+    // next model round resets roundHasError
+    session.noteAgentResponse(2)
+    const askNext = await handleMcpJsonRpc(
+      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'ask_clarification', arguments: { question: '要新建吗？', options: ['新建', '不用'] } } },
+      session,
+    )
+    expect((askNext.body!.result as { isError: boolean }).isError).toBe(false)
+    expect(session.clarification).toEqual({ question: '要新建吗？', options: ['新建', '不用'] })
+  })
+
+  it('fences all tool calls immediately once session.close() is called (e.g. during shutdown)', async () => {
+    const ran: string[] = []
+    const session = createMcpTurnSession({
+      execute: c => {
+        ran.push(c.name)
+        return { ok: true, result: {} }
+      },
+    })
+    session.close('aborted')
+    const res = await handleMcpJsonRpc(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'create_item', arguments: { kind: 'task', title: '买牛奶', explicit_assignment: false, priority: 'normal', allow_duplicate: false } },
+      },
+      session,
+    )
+    const out = res.body!.result as { isError: boolean; content: Array<{ text: string }> }
+    expect(out.isError).toBe(true)
+    expect(JSON.parse(out.content[0]!.text)).toMatchObject({ ok: false, code: 'aborted' })
+    expect(ran).toEqual([])
+  })
+
+  it('enforces maxIterations by rejecting board tool calls once maxIterations model responses finished', async () => {
+    let capFired = false
+    const ran: string[] = []
+    const session = createMcpTurnSession({
+      maxIterations: 2,
+      onIterationCap: () => {
+        capFired = true
+      },
+      execute: c => {
+        ran.push(c.name)
+        return { ok: true, result: {} }
+      },
+    })
+    session.noteAgentResponse(2)
+    const res = await handleMcpJsonRpc(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'create_item', arguments: { kind: 'task', title: '买牛奶', explicit_assignment: false, priority: 'normal', allow_duplicate: false } },
+      },
+      session,
+    )
+    const out = res.body!.result as { isError: boolean; content: Array<{ text: string }> }
+    expect(out.isError).toBe(true)
+    expect(JSON.parse(out.content[0]!.text)).toMatchObject({ ok: false, code: 'iteration_cap' })
+    expect(capFired).toBe(true)
     expect(ran).toEqual([])
   })
 

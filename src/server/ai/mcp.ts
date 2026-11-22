@@ -17,6 +17,7 @@ export const MCP_SERVER_NAME = 'family_board'
 export const MCP_PATH = '/mcp'
 export const MCP_PROTOCOL_VERSION = '2025-11-25'
 const MAX_BODY_BYTES = 1024 * 1024
+const READ_ONLY_TOOLS = new Set(['search_items'])
 
 export interface McpToolDefinition {
   name: string
@@ -36,6 +37,10 @@ export interface McpTurnSessionOptions {
   isCancelled?: () => boolean
   /** Called when a tool call discovers the utterance was undone so the runner can stop agy promptly. */
   onCancel?: () => void
+  /** Called when a tool call would exceed maxIterations so the runner can stop agy promptly. */
+  onIterationCap?: () => void
+  /** Max LLM calls configured for this utterance; a tool call after this many model responses is rejected. */
+  maxIterations?: number
   /** Hard safety cap on total MCP tool calls in a single utterance. */
   maxToolCalls?: number
 }
@@ -45,25 +50,56 @@ export interface McpTurnSession {
   readonly toolCalls: ToolCallRecord[]
   clarification: Clarification | null
   cancelled: boolean
+  /** Once true (timeout, cancel, iteration cap, clarified), no further tool calls may mutate the board. */
+  closed: boolean
+  closeReason: string | null
+  /** Number of completed model responses observed so far (updated by the runner). */
+  agentResponses: number
+  /** Whether any tool call in the current model round failed (used to guard ask_clarification). */
+  roundHasError: boolean
+  /** Calls rejected after ask_clarification in the same round cancel the tentative clarification. */
+  readonly maxIterations: number
   readonly execute: McpTurnSessionOptions['execute']
   readonly isCancelled?: () => boolean
   readonly onCancel?: () => void
+  readonly onIterationCap?: () => void
   readonly maxToolCalls: number
   nextCallSeq: number
+  /** Resets per-round tracking when a new model response finishes. */
+  noteAgentResponse(count: number): void
+  /** Locks the session immediately so no in-flight or late HTTP calls can mutate the board during shutdown. */
+  close(reason: string): void
 }
 
 export function createMcpTurnSession(opts: McpTurnSessionOptions): McpTurnSession {
-  return {
+  const maxIterations = opts.maxIterations ?? 6
+  const session: McpTurnSession = {
     sessionId: newSecret(),
     toolCalls: [],
     clarification: null,
     cancelled: false,
+    closed: false,
+    closeReason: null,
+    agentResponses: 0,
+    roundHasError: false,
+    maxIterations,
     execute: opts.execute,
     isCancelled: opts.isCancelled,
     onCancel: opts.onCancel,
-    maxToolCalls: opts.maxToolCalls ?? 24,
+    onIterationCap: opts.onIterationCap,
+    maxToolCalls: opts.maxToolCalls ?? Math.max(6, maxIterations * 6),
     nextCallSeq: 1,
+    noteAgentResponse(count: number) {
+      session.agentResponses = count
+      session.roundHasError = false
+    },
+    close(reason: string) {
+      if (session.closed) return
+      session.closed = true
+      session.closeReason = reason
+    },
   }
+  return session
 }
 
 interface JsonRpcRequest {
@@ -143,24 +179,57 @@ async function handleToolCall(
   const callId = `mcp_${session.nextCallSeq++}`
 
   const fail = (code: string, message: string, extra?: Record<string, unknown>, record = true): McpRpcResponse => {
+    session.roundHasError = true
     if (record) session.toolCalls.push({ id: callId, name: name || 'unknown', input: rawArgs, ok: false, code })
     return rpcResult(id, mcpToolResult({ ok: false, code, message, ...(extra ?? {}) }, true))
   }
 
+  // Hard fence: once the turn has ended (timeout, cancel, iteration cap, clarified), refuse all tool execution.
+  if (session.closed) {
+    return rpcResult(
+      id,
+      mcpToolResult({ ok: false, code: session.closeReason ?? 'closed', message: 'Turn has already ended; nothing was applied.' }, true),
+    )
+  }
+
   if (session.cancelled || session.isCancelled?.()) {
     session.cancelled = true
+    session.close('cancelled')
     session.onCancel?.()
     return fail('cancelled', 'Utterance was undone by the speaker. Do not call more tools; stop now.')
   }
 
+  // If ask_clarification already ran in this turn and a sibling tool arrives in the same batch:
+  // - Read-only search_items loses nothing when skipped (matching loop.ts).
+  // - Any other tool means the model mixed ask_clarification with a board change: cancel the tentative
+  //   clarification and reject this tool with not_run so nothing is silently lost and the model redoes them
+  //   in separate turns (changes first, then ask_clarification alone).
   if (session.clarification) {
+    if (READ_ONLY_TOOLS.has(name)) {
+      session.toolCalls.push({ id: callId, name, input: rawArgs, ok: false, code: 'skipped' })
+      return rpcResult(
+        id,
+        mcpToolResult({ ok: false, code: 'skipped', message: 'Skipped: ask_clarification already recorded for this turn.' }, true),
+      )
+    }
+    session.clarification = null
     return fail(
-      'clarification_pending',
-      'A clarification question has already been recorded for the speaker. Do not call any more tools; end your turn now.',
+      'not_run',
+      'Not run (nothing was applied): ask_clarification was called together with this tool, so the clarification question was also cancelled. Apply all changes that do not depend on the answer first, then call ask_clarification alone in a separate response.',
     )
   }
 
+  // Calling a board tool (other than ask_clarification, which ends the turn without needing another LLM call)
+  // after maxIterations model calls have already completed would require a (maxIterations + 1)th model call.
+  if (name !== 'ask_clarification' && session.agentResponses >= session.maxIterations) {
+    session.close('iteration_cap')
+    session.onIterationCap?.()
+    return fail('iteration_cap', 'Maximum model calls reached for this utterance; nothing was applied.')
+  }
+
   if (session.toolCalls.length >= session.maxToolCalls) {
+    session.close('iteration_cap')
+    session.onIterationCap?.()
     return fail('iteration_cap', 'Maximum tool calls reached for this utterance. Stop calling tools and give a brief summary.')
   }
 
@@ -170,6 +239,12 @@ async function handleToolCall(
   }
 
   if (parsed.call.name === 'ask_clarification') {
+    if (session.roundHasError) {
+      return fail(
+        'not_alone',
+        'Not asked: another tool call in this same response failed. Resolve that error first, then call ask_clarification alone in a separate response.',
+      )
+    }
     const options = [...new Set(parsed.call.input.options.map(o => o.trim()).filter(Boolean))].slice(0, 4)
     session.clarification = { question: parsed.call.input.question.trim(), options }
     session.toolCalls.push({ id: callId, name: 'ask_clarification', input: parsed.call.input, ok: true })
@@ -181,7 +256,7 @@ async function handleToolCall(
           recorded: true,
           question: session.clarification.question,
           options: session.clarification.options,
-          message: 'Question recorded for the speaker. Do NOT call any more tools; reply with the question text to end your turn.',
+          message: 'Question recorded for the speaker. Do NOT call any more tools; end your turn now.',
         },
         false,
       ),
@@ -245,7 +320,14 @@ export interface McpServerHandle {
 export async function startMcpServer(session: McpTurnSession): Promise<McpServerHandle> {
   const token = newSecret()
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    void handleHttp(req, res, token, session)
+    handleHttp(req, res, token, session).catch(err => {
+      console.error('[ai] mcp http handler error', err)
+      if (!res.headersSent && !res.writableEnded) {
+        res.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'internal_error' }))
+      } else if (!res.writableEnded) {
+        res.end()
+      }
+    })
   })
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
@@ -307,6 +389,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, token: stri
   }
 
   const out = await handleMcpJsonRpc(parsed, session)
+  if (res.writableEnded || res.destroyed) return
   const headers: Record<string, string> = { 'Mcp-Session-Id': session.sessionId }
   if (out.body) {
     headers['Content-Type'] = 'application/json'
